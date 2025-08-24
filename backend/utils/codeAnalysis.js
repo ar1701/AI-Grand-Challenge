@@ -1,13 +1,16 @@
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 require("dotenv").config();
+const {responseSchema} = require('./response.js')
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" }); // Using flash model for lower quota usage
+const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
 
 const generationConfig = {
   maxOutputTokens: 8192, // Reduced from 65535 to save quota
   temperature: 0.7, // Reduced for more consistent responses
   topP: 0.95,
+  responseMimeType: "application/json",
+  responseSchema: responseSchema
 };
 
 const safetySettings = [
@@ -36,29 +39,45 @@ Your task is to analyze the given code file for potential security vulnerabiliti
 Follow these rules strictly:
 1. Only evaluate and comment on code that is provided as input.
 2. Identify vulnerable code snippets (if any) and explain why they are vulnerable.
-3. Associate each vulnerability with relevant CWE/CVE IDs (if applicable).
-4. Suggest practical mitigation measures or safer alternatives.
-5. Respond ONLY in valid JSON format.
+3. For each vulnerability, provide detailed CWE and CVE information with descriptions and mitigations.
+4. Respond ONLY in valid JSON format with the exact schema provided below.
 
 ### JSON Response Schema:
 {
-"file": "<filename>",
-"analysis": [
-{
-"snippet": "<the exact vulnerable code snippet>",
-"line_numbers": [start_line, end_line],
-"cwe_ids": [],
-"cve_ids": [],
-"explanation": "<why this code is vulnerable>",
-"mitigation": "<suggested fix or best practice>"
-}
-]
+  "entries": [
+    {
+      "code_snippet": "<the exact vulnerable code snippet>",
+      "severity": "<Critical|High|Medium|Low>",
+      "vulnerability_explanation": "<why this specific code is vulnerable>",
+      "recommended_fix": "<concrete code example or steps to fix this vulnerability>",
+      "cve_ids": [
+        {
+          "id": "<CVE-YYYY-XXXXX or 'N/A' if not applicable>",
+          "description": "<detailed description of the CVE>",
+          "mitigation": "<specific mitigation for this CVE>"
+        }
+      ],
+      "cwe_ids": [
+        {
+          "id": "<CWE-XXX>",
+          "description": "<detailed description of the weakness type>",
+          "mitigation": "<specific mitigation strategies for this CWE>"
+        }
+      ]
+    }
+  ]
 }
 
-### Notes:
-- If no vulnerabilities are found, return: { "file": "<filename>", "analysis": [] }
-- Make sure the JSON is strictly valid (no comments, no trailing commas).
-- Do not include any natural language outside JSON.
+### Important Notes:
+- If no vulnerabilities are found, return: { "entries": [] }
+- Each vulnerability can have multiple CWE and CVE IDs (arrays)
+- Provide real CWE IDs that match the vulnerability type
+- Include severity levels: Critical, High, Medium, or Low
+- Make sure the JSON is strictly valid (no comments, no trailing commas)
+- Do not include any text outside the JSON response
+- Focus on actual security vulnerabilities, not code quality issues
+
+
 
 Now analyze the following code file:`;
 
@@ -95,8 +114,7 @@ async function generateContent(code, retries = 3) {
         } else {
           console.error("All retry attempts exhausted. Please try again later.");
           return JSON.stringify({
-            file: "unknown",
-            analysis: [],
+            entries: [],
             error: "Rate limit exceeded. Please try again in a few minutes."
           });
         }
@@ -104,8 +122,7 @@ async function generateContent(code, retries = 3) {
         // Other errors
         console.error("An unexpected error occurred:", error);
         return JSON.stringify({
-          file: "unknown", 
-          analysis: [],
+          entries: [],
           error: `Analysis failed: ${error.message}`
         });
       }

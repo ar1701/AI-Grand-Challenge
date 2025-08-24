@@ -1,42 +1,69 @@
-const express = require("express");
-const app = express();
-const mysql = require("mysql");
-const bodyParser = require("body-parser");
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-app.use(bodyParser.urlencoded({ extended: true }));
+#define USERNAME "admin"
+#define PASSWORD "password123"
 
+int generate_session_token() {
+    return rand();
+}
 
-const db = mysql.createConnection({
-    host: "localhost",
-    user: "root",
-    password: "12345",
-    database: "users_db"
-});
+void login(char *input) {
+    char query[256];
+    sprintf(query, "SELECT * FROM users WHERE name = '%s';", input);
+    printf("Executing query: %s\n", query);
+}
 
-app.post("/login", (req, res) => {
-    const username = req.body.username;
-    const password = req.body.password;
-    const query = \`SELECT * FROM users WHERE username = '\${username}' AND password = '\${password}'\`;
+void process_input(char *user_input) {
+    char buffer[64];
+    strcpy(buffer, user_input);
+    printf("Received: %s\n", buffer);
+}
 
-    db.query(query, (err, results) => {
-        if (err) throw err;
-        if (results.length > 0) {
-            res.send("Login successful!");
-        } else {
-            res.send("Invalid credentials");
-        }
-    });
-});
+void debug_log(char *msg) {
+    printf(msg);
+}
 
+void use_after_free_example() {
+    char *data = (char *)malloc(100);
+    strcpy(data, "Important data");
+    free(data);
+    printf("Data: %s\n", data);
+}
 
-app.get("/greet", (req, res) => {
-    const name = req.query.name;
-    res.send(\`<h1>Hello \${name}</h1>\`); // unsanitized user input directly in HTML
-});
+void double_free_example() {
+    char *ptr = malloc(128);
+    free(ptr);
+    free(ptr);
+}
 
+void run_command(char *user_input) {
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd), "ping -c 1 %s", user_input);
+    system(cmd);
+}
 
-app.get("/debug", (req, res) => {
-    res.json({ dbConfig: db.config }); // leaking DB credentials in API response
-});
+int main(int argc, char *argv[]) {
+    if (argc < 2) {
+        printf("Usage: %s <input>\n", argv[0]);
+        return 1;
+    }
 
-app.listen(3000, () => console.log("Server running on port 3000"));
+    login(argv[1]);
+
+    process_input(argv[1]);
+
+    debug_log(argv[1]);
+
+    use_after_free_example();
+    double_free_example();
+
+    run_command(argv[1]);
+
+    int token = generate_session_token();
+    printf("Session token: %d\n", token);
+
+    return 0;
+}
