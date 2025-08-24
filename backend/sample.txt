@@ -1,0 +1,42 @@
+const express = require("express");
+const app = express();
+const mysql = require("mysql");
+const bodyParser = require("body-parser");
+
+app.use(bodyParser.urlencoded({ extended: true }));
+
+
+const db = mysql.createConnection({
+    host: "localhost",
+    user: "root",
+    password: "12345",
+    database: "users_db"
+});
+
+app.post("/login", (req, res) => {
+    const username = req.body.username;
+    const password = req.body.password;
+    const query = \`SELECT * FROM users WHERE username = '\${username}' AND password = '\${password}'\`;
+
+    db.query(query, (err, results) => {
+        if (err) throw err;
+        if (results.length > 0) {
+            res.send("Login successful!");
+        } else {
+            res.send("Invalid credentials");
+        }
+    });
+});
+
+
+app.get("/greet", (req, res) => {
+    const name = req.query.name;
+    res.send(\`<h1>Hello \${name}</h1>\`); // unsanitized user input directly in HTML
+});
+
+
+app.get("/debug", (req, res) => {
+    res.json({ dbConfig: db.config }); // leaking DB credentials in API response
+});
+
+app.listen(3000, () => console.log("Server running on port 3000"));

@@ -11,8 +11,11 @@
   "license": "ISC",
   "packageManager": "pnpm@10.15.0",
   "dependencies": {
+    "@google/genai": "^1.15.0",
+    "@google/generative-ai": "^0.24.1",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "fs": "0.0.1-security",
     "path": "^0.12.7"
   }
 }
