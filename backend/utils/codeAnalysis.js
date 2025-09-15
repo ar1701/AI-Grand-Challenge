@@ -198,26 +198,33 @@ Remember: The cost of missing a critical vulnerability far exceeds the cost of t
 
 Approach this code analysis as if the security of a critical system depends on your thoroughness. Every vulnerability you miss could be exploited by attackers. Leave no stone unturned, question every line of code, and assume that sophisticated adversaries will attempt to exploit any weakness you overlook.
 
+You MUST group all identified vulnerabilities by the file in which they were found. Use the file path provided in the input as the identifier for each file.
+
 ### JSON Response Schema:
 {
-  "entries": [
+  "files": [
     {
-      "code_snippet": "<the exact vulnerable code snippet>",
-      "severity": "<Critical|High|Medium|Low>",
-      "vulnerability_explanation": "<why this specific code is vulnerable>",
-      "recommended_fix": "<concrete code example or steps to fix this vulnerability>",
-      "cve_ids": [
+      "file_path": "<full path of the analyzed file>",
+      "vulnerabilities": [
         {
-          "id": "<CVE-YYYY-XXXXX or 'N/A' if not applicable>",
-          "description": "<detailed description of the CVE>",
-          "mitigation": "<specific mitigation for this CVE>"
-        }
-      ],
-      "cwe_ids": [
-        {
-          "id": "<CWE-XXX>",
-          "description": "<detailed description of the weakness type>",
-          "mitigation": "<specific mitigation strategies for this CWE>"
+          "code_snippet": "<the exact vulnerable code snippet>",
+          "severity": "<Critical|High|Medium|Low>",
+          "vulnerability_explanation": "<why this specific code is vulnerable>",
+          "recommended_fix": "<concrete code example or steps to fix this vulnerability>",
+          "cve_ids": [
+            {
+              "id": "<CVE-YYYY-XXXXX or 'N/A'>",
+              "description": "<detailed description of the CVE>",
+              "mitigation": "<specific mitigation for this CVE>"
+            }
+          ],
+          "cwe_ids": [
+            {
+              "id": "<CWE-XXX>",
+              "description": "<detailed description of the weakness type>",
+              "mitigation": "<specific mitigation strategies for this CWE>"
+            }
+          ]
         }
       ]
     }
@@ -225,17 +232,15 @@ Approach this code analysis as if the security of a critical system depends on y
 }
 
 ### Important Notes:
-- If no vulnerabilities are found, return: { "entries": [] }
-- Each vulnerability can have multiple CWE and CVE IDs (arrays)
-- Provide real CWE IDs that match the vulnerability type
-- Include severity levels: Critical, High, Medium, or Low
-- Make sure the JSON is strictly valid (no comments, no trailing commas)
-- Do not include any text outside the JSON response
-- Focus on actual security vulnerabilities, not code quality issues
+- If no vulnerabilities are found in a file, the "vulnerabilities" array for that file should be empty.
+- Each vulnerability can have multiple CWE and CVE IDs (arrays).
+- Provide real CWE IDs that match the vulnerability type.
+- Include severity levels: Critical, High, Medium, or Low.
+- Make sure the JSON is strictly valid (no comments, no trailing commas).
+- Do not include any text outside the JSON response.
+- Focus on actual security vulnerabilities, not code quality issues.
 
-
-
-Now analyze the following code file:`;
+Now analyze the following code file(s):`;
 
 // Helper function to wait for a specified time
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -288,15 +293,16 @@ async function generateContent(code, retries = 3) {
 
 
 async function analyzeMultipleFiles(files) {
-  // Combine files content with clear separators
+  // Combine files content with clear separators and full paths
   let combinedCode = "";
   files.forEach(file => {
-    combinedCode += `\n\n// File: ${file.name}\n\`\`\`\n${file.content}\n\`\`\`\n`;
+    // 'file.name' should contain the full path from the batch process
+    combinedCode += `\n\n// File Path: ${file.name}\n\`\`\`\n${file.content}\n\`\`\`\n`;
   });
   
   // Analyze the combined code
-  return await generateContent(combinedCode);
+  const result = await generateContent(combinedCode);
+  return result; // No need to await again
 }
-
 
 module.exports = { generateContent, analyzeMultipleFiles };
