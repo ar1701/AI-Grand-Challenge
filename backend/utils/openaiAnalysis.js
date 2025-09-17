@@ -11,7 +11,7 @@ async function generateContentWithOpenAI(code) {
     console.log(`Analyzing code with OpenAI...`);
     
     const response = await openai.chat.completions.create({
-      model: "gpt-4-turbo", // Or "gpt-3.5-turbo" for a faster, cheaper option
+      model: "gpt-4o-mini", 
       messages: [
         {
           role: "system",
