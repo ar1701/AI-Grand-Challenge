@@ -1,102 +1,139 @@
-# API Payload Format Documentation
+# API Payload and Response Format Documentation
+
+**Last Updated**: September 17, 2025
 
 ## Overview
 
-This document describes the payload formats for the security analysis API endpoints in the AI Grand Challenge backend.
+This document describes the payload and response formats for the security analysis API endpoints. The backend is designed to be a robust, high-performance engine for a VS Code extension or other developer tools.
 
-## API Endpoints
+## Authentication
 
-### 1. `/code-block` (POST)
+All API endpoints require an API key for security and access control. The key must be passed in the request headers.
 
-**Purpose**: Analyze a single code block/string for security vulnerabilities
-
-**Payload Format**:
-
-```json
-{
-  "codeBlock": "string containing the code to analyze"
-}
-```
-
-**Example Request**:
-
-```json
-{
-  "codeBlock": "#include <stdio.h>\nint main() {\n    char buffer[10];\n    gets(buffer);\n    return 0;\n}"
-}
-```
-
-**Description**:
-
-- `codeBlock` (string, required): The code snippet to be analyzed for security vulnerabilities
-- The code can be in any programming language
-- Multi-line code should use `\n` for line breaks
+-   **Header**: `X-API-Key`
+-   **Value**: `your-secret-api-key`
+-   Requests without a valid key will be rejected with a `401 Unauthorized` error.
 
 ---
 
-### 2. `/analyze-multiple-files` (POST)
+## API Endpoints
 
-**Purpose**: Analyze multiple files in batches based on token limits
+The API offers two interaction models: a simple synchronous model for quick checks and a robust asynchronous model recommended for production clients.
 
-**Payload Format**:
+### Model 1: Synchronous API
 
-```json
-{
-  "filePaths": ["array", "of", "file", "paths"],
-  "instructions": "optional custom instructions for analysis"
-}
-```
+The server processes the request and holds the connection open until the analysis is complete.
 
-**Example Request**:
+#### Endpoint: `POST /code-block`
 
-```json
-{
-  "filePaths": ["/path/to/file1.js", "/path/to/file2.c", "/path/to/file3.py"],
-  "instructions": "Focus on authentication vulnerabilities"
-}
-```
+**Purpose**: Analyze a single code block/string for vulnerabilities.
 
-**Description**:
+* **Payload Format**:
+    ```json
+    {
+      "codeBlock": "string containing the code to analyze"
+    }
+    ```
 
-- `filePaths` (array of strings, required): Array of absolute file paths to analyze
-- `instructions` (string, optional): Custom instructions to guide the security analysis
-- Files are automatically batched based on the 30,000 token limit
+#### Endpoint: `POST /analyze-multiple-files`
+
+**Purpose**: Analyze multiple files, returning the result in the same request.
+
+* **Payload Format**:
+    ```json
+    {
+      "filePaths": ["/path/to/file1.js", "/path/to/file2.c"]
+    }
+    ```
+    -   `filePaths` (array of strings, required): An array of absolute file paths to analyze.
+
+---
+
+### Model 2: Asynchronous API (Recommended)
+
+This model uses a job queue, making it ideal for responsive clients. The client submits a job and polls for the result.
+
+#### Endpoint: `POST /analysis-jobs`
+
+**Purpose**: Submits a new analysis job to the queue.
+
+* **Payload Format**: Same as `/analyze-multiple-files`.
+* **Success Response (`202 Accepted`)**: Responds immediately with a `jobId`.
+    ```json
+    {
+        "success": true,
+        "message": "Analysis job accepted.",
+        "jobId": "a1b2c3d4-e5f6-7890-1234-567890abcdef"
+    }
+    ```
+
+#### Endpoint: `GET /analysis-jobs/result/:jobId`
+
+**Purpose**: Checks the status and retrieves the result of an analysis job.
+
+* **URL Parameter**: `jobId` from the POST request.
+* **Response States**:
+    * **Pending**: `{ "status": "pending" }`
+    * **Failed**: `{ "status": "failed", "error": "Reason for failure" }`
+    * **Completed**:
+        ```json
+        {
+          "status": "completed",
+          "result": {
+            "engine": "openai",
+            "files": ["/path/to/file1.js"],
+            "analysis": { /* ... see full analysis structure below ... */ }
+          }
+        }
+        ```
 
 ---
 
 ## API Response Format
 
-Both endpoints return responses following a standardized schema:
+The core analysis object is standardized across all endpoints.
 
-### Success Response Structure
+### Success Response Structure (for `/analyze-multiple-files`)
 
 ```json
 {
   "success": true,
-  "result": {
-    "entries": [
-      {
-        "code_snippet": "vulnerable code here",
-        "severity": "Critical|High|Medium|Low",
-        "vulnerability_explanation": "detailed explanation of the vulnerability",
-        "recommended_fix": "specific steps or code to fix the vulnerability",
-        "cve_ids": [
+  "batches": [
+    {
+      "engine": "openai",
+      "files": [
+        "/path/to/file1.js",
+        "/path/to/file2.c"
+      ],
+      "analysis": {
+        "files": [
           {
-            "id": "CVE-YYYY-XXXXX",
-            "description": "detailed description of the CVE",
-            "mitigation": "specific mitigation strategy for this CVE"
-          }
-        ],
-        "cwe_ids": [
+            "file_path": "/path/to/file1.js",
+            "vulnerabilities": []
+          },
           {
-            "id": "CWE-XXX",
-            "description": "detailed description of the weakness type",
-            "mitigation": "specific mitigation strategies for this CWE"
+            "file_path": "/path/to/file2.c",
+            "vulnerabilities": [
+              {
+                "code_snippet": "gets(buffer);",
+                "severity": "Critical",
+                "vulnerability_explanation": "The 'gets' function is deprecated and extremely dangerous because it does not perform bounds checking, leading to buffer overflows.",
+                "recommended_fix": "Replace 'gets' with a bounds-checked function like 'fgets'. Example: fgets(buffer, sizeof(buffer), stdin);",
+                "cve_ids": [],
+                "cwe_ids": [
+                  {
+                    "id": "CWE-120",
+                    "description": "Buffer Copy without Checking Size of Input ('Classic Buffer Overflow')",
+                    "mitigation": "Use functions that limit the input size to the size of the destination buffer."
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
-    ]
-  }
+    }
+  ]
 }
 ```
 
@@ -109,129 +146,94 @@ Both endpoints return responses following a standardized schema:
 }
 ```
 
-### Response Fields Description
-
-#### Entry Object
-
-- **`code_snippet`** (string): The exact vulnerable code snippet identified
-- **`severity`** (string): Severity level - one of: `Critical`, `High`, `Medium`, `Low`
-- **`vulnerability_explanation`** (string): Detailed explanation of why the code is vulnerable
-- **`recommended_fix`** (string): Specific remediation steps or code examples
-- **`cve_ids`** (array): Array of related CVE (Common Vulnerabilities and Exposures) entries
-- **`cwe_ids`** (array): Array of related CWE (Common Weakness Enumeration) entries
-
-#### CVE/CWE Object
-
-- **`id`** (string): The CVE or CWE identifier
-- **`description`** (string): Detailed description of the vulnerability/weakness
-- **`mitigation`** (string): Specific mitigation strategies
-
 ---
 
 ## Severity Levels
 
 ### Critical
-
 - Remote Code Execution (RCE)
 - SQL Injection with database access
 - Authentication bypass allowing admin access
-- Hardcoded secrets with high privilege access
-- Memory corruption leading to system compromise
 
 ### High
-
 - Privilege escalation vulnerabilities
 - Sensitive data exposure (PII, financial, health)
 - Cross-Site Scripting (XSS) in sensitive contexts
-- Insecure direct object references with data access
-- Cryptographic failures with significant impact
 
 ### Medium
-
 - Information disclosure vulnerabilities
 - CSRF vulnerabilities
 - Weak authentication mechanisms
-- Insecure configurations with potential impact
-- Input validation bypasses with limited impact
 
 ### Low
-
 - Information leakage with minimal impact
 - Missing security headers with low exploitability
-- Weak encryption with limited exposure
-- Minor configuration issues
-- Deprecated functions with available alternatives
 
 ---
 
 ## Implementation Details
 
+### Dual AI Engine
+-   The backend supports both **Google Gemini** and **OpenAI GPT** models.
+-   The active engine is configured globally on the server via the `ANALYSIS_ENGINE` variable in the `.env` file. It is not selectable per-request.
+
+### Caching Layer
+-   A robust caching system using **Redis** is implemented to dramatically improve performance and reduce costs.
+-   **Content Hashing (SHA-256)** is used to generate cache keys. The cache is keyed by the file's content, not its path, ensuring that any modification to a file results in a fresh analysis.
+
 ### Token Management
+-   The `TokenManager` class automatically batches files to stay within the AI model's context window limits (e.g., 30,000 tokens).
 
-- The system uses a `TokenManager` class to handle batching files based on the 30,000 token limit for the Gemini model
-- Files are automatically split into appropriate batches to avoid exceeding API limits
-
-### Rate Limiting
-
-- Built-in retry logic with exponential backoff for handling rate limits (429 errors)
-- Default retry attempts: 3
-- Wait times: 60 seconds for first retry, then 30 seconds per subsequent attempt
-
-### File Processing
-
-- For multiple files, the system reads file contents from the provided file paths
-- Files are processed in batches to stay within token limits
-- Each file is clearly marked with its path in the analysis
+### Rate Limiting & Security
+-   **Server-Side Rate Limiting**: The API is protected against abuse using middleware to limit request frequency per IP.
+-   **API Key Authentication**: All endpoints are protected and require a valid `X-API-Key`.
 
 ### Security Analysis Categories
-
-The system analyzes code across multiple security dimensions:
-
-1. **Input Validation Analysis**
-2. **Authentication & Authorization Flaws**
-3. **Data Exposure & Privacy Violations**
-4. **Cryptographic Weaknesses**
-5. **Business Logic Flaws**
-6. **Configuration & Deployment Issues**
-7. **Dependency & Supply Chain Risks**
-8. **Memory & Resource Management**
-9. **Concurrency & Race Conditions**
+1.  **Input Validation Analysis**
+2.  **Authentication & Authorization Flaws**
+3.  **Data Exposure & Privacy Violations**
+4.  **Cryptographic Weaknesses**
+5.  **Business Logic Flaws**
+6.  **Configuration & Deployment Issues**
+7.  **Dependency & Supply Chain Risks**
+8.  **Memory & Resource Management**
+9.  **Concurrency & Race Conditions**
 10. **Client-Side Security (Web Applications)**
 
 ---
 
 ## Example Usage
 
-### Single Code Block Analysis
+### Synchronous Analysis
 
 ```bash
-curl -X POST http://localhost:3000/code-block \
+curl -X POST http://localhost:8080/analyze-multiple-files \
   -H "Content-Type: application/json" \
-  -d '{
-    "codeBlock": "const express = require(\"express\");\nconst app = express();\napp.get(\"/user/:id\", (req, res) => {\n  const query = \"SELECT * FROM users WHERE id = \" + req.params.id;\n  db.query(query, (err, result) => {\n    res.json(result);\n  });\n});"
-  }'
-```
-
-### Multiple Files Analysis
-
-```bash
-curl -X POST http://localhost:3000/analyze-multiple-files \
-  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key" \
   -d '{
     "filePaths": [
       "/app/src/auth.js",
-      "/app/src/database.js",
-      "/app/src/api.js"
-    ],
-    "instructions": "Focus on SQL injection and authentication bypass vulnerabilities"
+      "/app/src/database.js"
+    ]
   }'
 ```
 
----
+### Asynchronous Analysis
 
-## Notes
+**Step 1: Submit the job**
+```bash
+curl -X POST http://localhost:8080/analysis-jobs \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-secret-api-key" \
+  -d '{
+    "filePaths": ["/app/src/main.py"]
+  }'
+```
+> **Response:** `{ "success": true, "jobId": "some-unique-job-id" }`
 
-- If no vulnerabilities are found, the `entries` array will be empty: `{ "entries": [] }`
-- Each vulnerability can have multiple CWE and CVE IDs
-- The analysis focuses on actual security vulnerabilities, not general code quality issues
-- All responses are in valid JSON format without comments or trailing commas
+**Step 2: Poll for the result**
+```bash
+curl -X GET http://localhost:8080/analysis-jobs/result/some-unique-job-id \
+  -H "X-API-Key: your-secret-api-key"
+```
+> **Response:** `{ "status": "completed", "result": { ... } }`
