@@ -8,14 +8,13 @@ const highlightStyles: Record<Severity, vscode.TextEditorDecorationType> = {
   Low: vscode.window.createTextEditorDecorationType({ backgroundColor: "rgba(0,0,255,0.2)" })
 };
 
-// Clear previous decorations
 export function clearHighlights(editor: vscode.TextEditor) {
   (Object.keys(highlightStyles) as Severity[]).forEach(sev => {
     editor.setDecorations(highlightStyles[sev], []);
   });
 }
 
-// MODIFIED: This function now returns the entries with line numbers
+
 export function highlightEntries(editor: vscode.TextEditor, entries: AnalyzerEntry[]): Issue[] {
   clearHighlights(editor);
   const text = editor.document.getText();
@@ -49,11 +48,10 @@ export function highlightEntries(editor: vscode.TextEditor, entries: AnalyzerEnt
 
         decorations[entry.severity].push({ range, hoverMessage });
 
-        // Add the entry with its line number to our results
         issuesWithLines.push({
           ...entry,
           filePath: editor.document.uri.fsPath,
-          line: start.line, // Get the starting line number
+          line: start.line, 
         });
       }
     } catch (err) {

@@ -33,11 +33,9 @@ export async function scanSingleFileWithBackend(filename: string, content: strin
     throw new Error(`Backend error ${res.status}`);
   }
 
-  // The single-file endpoint returns a structure like { success, tokenCount, result: { entries: [...] } }
-  // We use `as BackendSingleFilePayload` to tell TypeScript the shape of the object.
   const jsonResponse = (await res.json()) as BackendSingleFilePayload;
 
-  // Now TypeScript understands the object and the red underline is gone.
+
   if (jsonResponse.success && jsonResponse.result) {
       return { entries: jsonResponse.result.entries || [] };
   } else {

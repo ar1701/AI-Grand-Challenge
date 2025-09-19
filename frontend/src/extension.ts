@@ -4,7 +4,6 @@ import { highlightEntries, clearHighlights } from "./highlighter";
 import { IssuesPanelProvider } from "./issuesPanel";
 import { Issue } from "./types";
 
-// NEW: Store the scan results globally in the extension
 let projectIssues: Issue[] = [];
 
 export function activate(context: vscode.ExtensionContext) {
@@ -36,9 +35,9 @@ export function activate(context: vscode.ExtensionContext) {
           throw new Error("Invalid response from backend");
         }
         
-        // MODIFIED: The highlighter now returns issues with line numbers
+       
         const issuesWithLines = highlightEntries(editor, response.entries);
-        projectIssues = issuesWithLines; // Store results
+        projectIssues = issuesWithLines; 
 
         if (issuesWithLines.length > 0) {
           issuesPanelProvider.update(issuesWithLines);
@@ -57,7 +56,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Command to scan the entire project
   const scanProject = vscode.commands.registerCommand("secureScan.scanProject", async () => {
-    // ... (This command also remains mostly unchanged, but now stores results)
+    
      await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
       title: "Scanning Project",
@@ -66,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         progress.report({ increment: 10, message: "Discovering files..." });
         const files = await vscode.workspace.findFiles(
-          '**/*.{js,ts,py,java,go,rb,php,cs,c,cpp,h,hpp,html,css,json,yaml,yml}',
+          '**/*.{js,ts,py,java,go,rb,php,cs,c,cpp,h,hpp,html,css,json,yaml,yml,jsx}',
           '**/{node_modules,venv,target,dist,.git,vendor,build,out}/**'
         );
         if (files.length === 0) {
@@ -98,17 +97,16 @@ export function activate(context: vscode.ExtensionContext) {
           }
         }
         
-        projectIssues = allIssues; // Store results
+        projectIssues = allIssues; 
         issuesPanelProvider.update(projectIssues);
         vscode.window.showInformationMessage(`Project scan complete: ${projectIssues.length} issue(s) found.`);
       } catch (error: any) {
-        console.error("💥 Project scan failed:", error);
+        console.error("Project scan failed:", error);
         vscode.window.showErrorMessage(`Project scan failed: ${error.message}`);
       }
     });
   });
-  
-  // NEW: Command to handle navigation from the webview panel
+
   const navigateToCommand = vscode.commands.registerCommand('secureScan.navigateTo', async (filePath: string, line: number) => {
     try {
       const uri = vscode.Uri.file(filePath);
@@ -124,7 +122,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  // NEW: Event listener to re-apply highlights when you switch files
+  
   const activeEditorListener = vscode.window.onDidChangeActiveTextEditor(editor => {
     if (editor) {
       const filePath = editor.document.uri.fsPath;
