@@ -1,0 +1,27 @@
+# Use a specific version of the docker-compose file format
+version: '3.8'
+
+# Define the services (containers) for your application
+services:
+  # The Node.js application service
+  app:
+    # Build the image using the Dockerfile in the current directory
+    build: .
+    # Map port 8080 on your local machine to port 8080 in the container
+    ports:
+      - "8080:8080"
+    # Load environment variables from the .env file
+    env_file:
+      - .env
+    # Make the app service dependent on the redis service
+    # This ensures Redis starts before your app does
+    depends_on:
+      - redis
+
+  # The Redis database service
+  redis:
+    # Use the official Redis image from Docker Hub
+    image: "redis:alpine"
+    # (Optional) Map the Redis port if you want to connect from your host machine
+    ports:
+      - "6379:6379"

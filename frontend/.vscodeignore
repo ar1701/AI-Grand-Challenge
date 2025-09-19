@@ -1,0 +1,6 @@
+out/test/**
+src/**
+**/*.map
+.vscode/**
+.git/**
+**/.DS_Store

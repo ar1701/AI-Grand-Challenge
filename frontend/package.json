@@ -1,0 +1,80 @@
+{
+  "name": "vscode-secure-code-analyzer",
+  "displayName": "Secure Code Analyzer",
+  "description": "Analyzes code with backend and highlights vulnerabilities by severity.",
+  "version": "1.0.0",
+  "publisher": "your-name",
+  "engines": {
+    "vscode": "^1.95.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "icon": "./media/lock.png",
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "secureScan.scanActiveFile",
+        "title": "Secure Scan: Scan Active File"
+      },
+      {
+        "command": "secureScan.scanProject",
+        "title": "Secure Scan: Scan Entire Project"
+      },
+      {
+        "command": "secureScan.toggleAutoScanOnSave",
+        "title": "Secure Scan: Toggle Auto Scan on Save"
+      }
+    ],
+    "configuration": {
+      "type": "object",
+      "title": "Secure Code Analyzer Settings",
+      "properties": {
+        "secureScan.backendUrl": {
+          "type": "string",
+          "default": "http://localhost:8080",
+          "description": "Backend API base URL"
+        },
+        "secureScan.autoScanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan files when saving"
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "secureScan",
+          "title": "SecureScan",
+          "icon": "./media/lock.svg"
+        }
+      ]
+    },
+    "views": {
+      "secureScan": [
+        {
+          "id": "secureScan.issuesPanel",
+          "name": "Issues",
+          "type": "webview",
+          "icon": "./media/lock.svg"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.12",
+    "@types/vscode": "^1.95.0",
+    "typescript": "^5.5.4",
+    "vsce": "^2.15.0"
+  },
+  "dependencies": {
+    "node-fetch": "^3.3.2"
+  }
+}
