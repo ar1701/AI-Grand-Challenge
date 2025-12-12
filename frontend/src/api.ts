@@ -53,16 +53,29 @@ export async function scanProjectWithBackend(filePaths: string[]): Promise<Proje
 
   const endpoint = `${baseUrl}/analyze-multiple-files`;
 
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filePaths })
-  });
+  console.log(`🌐 Making request to: ${endpoint}`);
+  console.log(`📁 Sending ${filePaths.length} file paths:`, filePaths);
 
-  if (!res.ok) {
-    const errorBody = await res.text();
-    throw new Error(`Backend error ${res.status}: ${errorBody}`);
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filePaths })
+    });
+
+    console.log(`📡 Response status: ${res.status}`);
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      console.error(`❌ Backend error response:`, errorBody);
+      throw new Error(`Backend error ${res.status}: ${errorBody}`);
+    }
+
+    const result = await res.json();
+    console.log(`✅ Received response:`, result);
+    return result as ProjectScanResponse;
+  } catch (error) {
+    console.error(`🚨 Network/fetch error:`, error);
+    throw error;
   }
-
-  return (await res.json()) as ProjectScanResponse;
 }

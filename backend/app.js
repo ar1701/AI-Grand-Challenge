@@ -16,8 +16,27 @@ const path = require('path')
 const TokenManager = require('./utils/tokenManager')
 const { analyzeMultipleFilesWithOpenAI } = require('./utils/openaiAnalysis.js');
 
-app.use(express.json()); 
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' })); 
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
+
+// Middleware to handle JSON parsing errors
+app.use((error, req, res, next) => {
+  if (error instanceof SyntaxError && error.status === 400 && 'body' in error) {
+    console.error(`[${new Date().toISOString()}] JSON Parse Error:`, error.message);
+    return res.status(400).json({ 
+      success: false, 
+      error: 'Invalid JSON in request body' 
+    });
+  }
+  next();
+});
+
+// Debug middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
+  console.log(`[${new Date().toISOString()}] Content-Type: ${req.headers['content-type']}`);
+  next();
+});
 
 // Initialize Google GenAI
 const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
@@ -67,9 +86,44 @@ function getContentHash(content) {
 
 // In app.js
 app.post("/analyze-multiple-files", async (req, res) => {
-  console.log(`[${new Date().toISOString()}] --- Received new request ---`);
+  // Force logging to stdout
+  console.log("=".repeat(80));
+  console.log(`🔥 [${new Date().toISOString()}] NEW REQUEST TO /analyze-multiple-files`);
+  console.log(`🔥 Request method: ${req.method}`);
+  console.log(`🔥 Request headers:`, JSON.stringify(req.headers, null, 2));
+  console.log(`🔥 Request body:`, JSON.stringify(req.body, null, 2));
+  console.log("=".repeat(80));
+  
   try {
+    // Check if req.body exists and has the required properties
+    if (!req.body) {
+      console.error(`[${new Date().toISOString()}] --- FATAL ERROR in route --- req.body is undefined`);
+      return res.status(400).json({ 
+        success: false, 
+        error: "Request body is missing. Please ensure you're sending a JSON request with Content-Type: application/json" 
+      });
+    }
+
     const { filePaths } = req.body;
+    
+    // Validate filePaths
+    if (!filePaths) {
+      console.error(`[${new Date().toISOString()}] --- ERROR --- filePaths is missing from request body`);
+      return res.status(400).json({ 
+        success: false, 
+        error: "filePaths is required in the request body" 
+      });
+    }
+
+    if (!Array.isArray(filePaths)) {
+      console.error(`[${new Date().toISOString()}] --- ERROR --- filePaths must be an array`);
+      return res.status(400).json({ 
+        success: false, 
+        error: "filePaths must be an array of file paths" 
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] Processing ${filePaths.length} file(s)`);
     // ... validation
 
     const batches = await tokenManager.processFiles(filePaths);
@@ -143,12 +197,40 @@ app.post("/code-block", async (req,res)=>{
         }
 
         // Use the generateContent function directly from codeAnalysis.js
-        const response = await generateContent(codeBlock);
+        const rawResponse = await generateContent(codeBlock);
+        
+        // Parse the JSON response from the AI model
+        let parsedResponse;
+        try {
+            // The AI returns JSON wrapped in markdown code blocks, so extract it
+            const jsonMatch = rawResponse.match(/```json\n([\s\S]*?)\n```/);
+            if (jsonMatch) {
+                parsedResponse = JSON.parse(jsonMatch[1]);
+            } else {
+                // If no markdown wrapper, try parsing directly
+                parsedResponse = JSON.parse(rawResponse);
+            }
+        } catch (parseError) {
+            console.error("Error parsing AI response:", parseError);
+            console.log("Raw response:", rawResponse);
+            return res.status(500).json({
+                success: false,
+                error: "Failed to parse AI response"
+            });
+        }
+
+        // Convert the parsed response to the expected format
+        let entries = [];
+        if (parsedResponse.files && parsedResponse.files[0] && parsedResponse.files[0].vulnerabilities) {
+            entries = parsedResponse.files[0].vulnerabilities;
+        }
 
         return res.json({
             success: true,
             tokenCount,
-            result: response
+            result: {
+                entries: entries
+            }
         });
     } catch (error) {
         console.error("Error in /code-block:", error);

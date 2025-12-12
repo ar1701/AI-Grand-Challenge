@@ -56,6 +56,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Command to scan the entire project
   const scanProject = vscode.commands.registerCommand("secureScan.scanProject", async () => {
+    console.log("🚀 Starting project scan...");
     
      await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
@@ -64,18 +65,23 @@ export function activate(context: vscode.ExtensionContext) {
     }, async (progress) => {
       try {
         progress.report({ increment: 10, message: "Discovering files..." });
+        console.log("📂 Discovering files...");
         const files = await vscode.workspace.findFiles(
           '**/*.{js,ts,py,java,go,rb,php,cs,c,cpp,h,hpp,html,css,json,yaml,yml,jsx}',
           '**/{node_modules,venv,target,dist,.git,vendor,build,out}/**'
         );
+        console.log(`📁 Found ${files.length} files`);
         if (files.length === 0) {
           vscode.window.showInformationMessage("No scannable files found in the project.");
           return;
         }
 
         const filePaths = files.map(file => file.fsPath);
+        console.log(`📄 File paths:`, filePaths);
         progress.report({ increment: 20, message: `Found ${filePaths.length} files. Analyzing...` });
+        console.log("🔍 Calling backend API...");
         const response = await scanProjectWithBackend(filePaths);
+        console.log("✅ Backend response received:", response);
         if (!response.success || !response.batches) {
             throw new Error(response.error || "Failed to get a valid response from the backend.");
         }
