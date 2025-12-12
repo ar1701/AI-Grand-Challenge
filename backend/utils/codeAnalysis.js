@@ -4,7 +4,7 @@ const {responseSchema} = require('./response.js')
 const { masterPrompt } = require('./prompt.js');
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" }); 
+const model = genAI.getGenerativeModel({ model: "gemini-3-pro-preview" }); 
 const prompt = masterPrompt;
 
 const generationConfig = {
