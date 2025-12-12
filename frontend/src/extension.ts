@@ -57,6 +57,7 @@ export function activate(context: vscode.ExtensionContext) {
   // Command to scan the entire project
   const scanProject = vscode.commands.registerCommand("secureScan.scanProject", async () => {
     console.log("🚀 Starting project scan...");
+    vscode.window.showInformationMessage("Starting project scan...");
     
      await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
@@ -66,18 +67,29 @@ export function activate(context: vscode.ExtensionContext) {
       try {
         progress.report({ increment: 10, message: "Discovering files..." });
         console.log("📂 Discovering files...");
+        
+        // Check if we have a workspace
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (!workspaceFolder) {
+          vscode.window.showErrorMessage("No workspace folder found. Please open a folder first.");
+          return;
+        }
+        console.log(`📁 Workspace folder: ${workspaceFolder.uri.fsPath}`);
+        
         const files = await vscode.workspace.findFiles(
           '**/*.{js,ts,py,java,go,rb,php,cs,c,cpp,h,hpp,html,css,json,yaml,yml,jsx}',
           '**/{node_modules,venv,target,dist,.git,vendor,build,out}/**'
         );
         console.log(`📁 Found ${files.length} files`);
+        vscode.window.showInformationMessage(`Found ${files.length} files to scan`);
+        
         if (files.length === 0) {
           vscode.window.showInformationMessage("No scannable files found in the project.");
           return;
         }
 
         const filePaths = files.map(file => file.fsPath);
-        console.log(`📄 File paths:`, filePaths);
+        console.log(`📄 File paths:`, filePaths.slice(0, 5), files.length > 5 ? `... and ${files.length - 5} more` : '');
         progress.report({ increment: 20, message: `Found ${filePaths.length} files. Analyzing...` });
         console.log("🔍 Calling backend API...");
         const response = await scanProjectWithBackend(filePaths);

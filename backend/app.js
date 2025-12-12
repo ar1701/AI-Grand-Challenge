@@ -138,16 +138,22 @@ app.post("/analyze-multiple-files", async (req, res) => {
       const batchContent = batch.map(f => f.content).join('');
       const cacheKey = getContentHash(batchContent);
       console.log(`[${new Date().toISOString()}] 1. Batch #${index + 1}: Generated cache key: ${cacheKey}`);
+      console.log(`[${new Date().toISOString()}] 1a. Batch #${index + 1}: Content length: ${batchContent.length} chars`);
+      console.log(`[${new Date().toISOString()}] 1b. Batch #${index + 1}: First 100 chars: ${batchContent.substring(0, 100).replace(/\n/g, '\\n')}`);
 
       console.log(`[${new Date().toISOString()}] 2. Batch #${index + 1}: Checking Redis for key...`);
       const cachedResult = await redisClient.get(cacheKey);
       console.log(`[${new Date().toISOString()}] 3. Batch #${index + 1}: Finished checking Redis.`);
 
       if (cachedResult) {
-        console.log(`[${new Date().toISOString()}] 4a. Batch #${index + 1}: Cache HIT.`);
+        console.log(`[${new Date().toISOString()}] 4a. Batch #${index + 1}: Cache HIT for key: ${cacheKey}`);
         analysisResult = cachedResult;
       } else {
-        console.log(`[${new Date().toISOString()}] 4b. Batch #${index + 1}: Cache MISS.`);
+        console.log(`[${new Date().toISOString()}] 4b. Batch #${index + 1}: Cache MISS for key: ${cacheKey}`);
+        
+        // Debug: Let's see what keys exist in Redis
+        const existingKeys = await redisClient.keys('*');
+        console.log(`[${new Date().toISOString()}] 4c. Batch #${index + 1}: Existing Redis keys: ${existingKeys.slice(0, 5)}`);
         
         console.log(`[${new Date().toISOString()}] 5. Batch #${index + 1}: Calling AI analysis...`);
         if (selectedEngine.toLowerCase() === 'openai') {
