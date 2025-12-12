@@ -23,6 +23,10 @@
         "title": "Secure Scan: Scan Entire Project"
       },
       {
+        "command": "secureScan.scanSelectedFiles",
+        "title": "Secure Scan: Scan Selected Files"
+      },
+      {
         "command": "secureScan.toggleAutoScanOnSave",
         "title": "Secure Scan: Toggle Auto Scan on Save"
       }

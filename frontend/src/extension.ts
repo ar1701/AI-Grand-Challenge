@@ -125,6 +125,99 @@ export function activate(context: vscode.ExtensionContext) {
     });
   });
 
+  // Command to scan selected files
+  const scanSelectedFiles = vscode.commands.registerCommand("secureScan.scanSelectedFiles", async () => {
+    console.log("🎯 Starting selected files scan...");
+    vscode.window.showInformationMessage("Select files to scan...");
+
+    try {
+      // Check if we have a workspace
+      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+      if (!workspaceFolder) {
+        vscode.window.showErrorMessage("No workspace folder found. Please open a folder first.");
+        return;
+      }
+
+      // First, discover available files
+      const allFiles = await vscode.workspace.findFiles(
+        '**/*.{js,ts,py,java,go,rb,php,cs,c,cpp,h,hpp,html,css,json,yaml,yml,jsx}',
+        '**/{node_modules,venv,target,dist,.git,vendor,build,out}/**'
+      );
+
+      if (allFiles.length === 0) {
+        vscode.window.showInformationMessage("No scannable files found in the project.");
+        return;
+      }
+
+      // Create quick pick items with relative paths for better UX
+      const quickPickItems = allFiles.map(file => {
+        const relativePath = vscode.workspace.asRelativePath(file);
+        return {
+          label: relativePath,
+          description: file.fsPath,
+          picked: false
+        };
+      });
+
+      // Show multi-select quick pick
+      const selectedItems = await vscode.window.showQuickPick(quickPickItems, {
+        placeHolder: "Select files to scan (use Space to select/deselect, Enter to confirm)",
+        canPickMany: true,
+        matchOnDescription: true
+      });
+
+      if (!selectedItems || selectedItems.length === 0) {
+        vscode.window.showInformationMessage("No files selected for scanning.");
+        return;
+      }
+
+      const selectedFilePaths = selectedItems.map(item => item.description);
+      console.log(`📁 Selected ${selectedFilePaths.length} files:`, selectedFilePaths);
+
+      await vscode.window.withProgress({
+        location: vscode.ProgressLocation.Notification,
+        title: "Scanning Selected Files",
+        cancellable: false
+      }, async (progress) => {
+        progress.report({ increment: 10, message: `Analyzing ${selectedFilePaths.length} selected files...` });
+        vscode.window.showInformationMessage(`Scanning ${selectedFilePaths.length} selected files...`);
+
+        console.log("🔍 Calling backend API for selected files...");
+        const response = await scanProjectWithBackend(selectedFilePaths);
+        console.log("✅ Backend response received for selected files:", response);
+
+        if (!response.success || !response.batches) {
+          throw new Error(response.error || "Failed to get a valid response from the backend.");
+        }
+
+        progress.report({ increment: 70, message: "Processing analysis results..." });
+        const allIssues: Issue[] = [];
+        
+        for (const batch of response.batches) {
+          let analysisData = batch.analysis;
+          if (typeof analysisData === 'string') {
+            analysisData = JSON.parse(analysisData);
+          }
+          if (analysisData && analysisData.files) {
+            for (const fileAnalysis of analysisData.files) {
+              const doc = await vscode.workspace.openTextDocument(fileAnalysis.file_path);
+              const editor = await vscode.window.showTextDocument(doc, { preview: true, preserveFocus: true });
+              const issuesWithLines = highlightEntries(editor, fileAnalysis.vulnerabilities);
+              allIssues.push(...issuesWithLines);
+            }
+          }
+        }
+
+        projectIssues = allIssues;
+        issuesPanelProvider.update(projectIssues);
+        vscode.window.showInformationMessage(`Selected files scan complete: ${projectIssues.length} issue(s) found.`);
+      });
+    } catch (error: any) {
+      console.error("Selected files scan failed:", error);
+      vscode.window.showErrorMessage(`Selected files scan failed: ${error.message}`);
+    }
+  });
+
   const navigateToCommand = vscode.commands.registerCommand('secureScan.navigateTo', async (filePath: string, line: number) => {
     try {
       const uri = vscode.Uri.file(filePath);
@@ -153,7 +246,7 @@ export function activate(context: vscode.ExtensionContext) {
     }
   });
 
-  context.subscriptions.push(scanActiveFile, scanProject, navigateToCommand, activeEditorListener);
+  context.subscriptions.push(scanActiveFile, scanProject, scanSelectedFiles, navigateToCommand, activeEditorListener);
 }
 
 export function deactivate() {
