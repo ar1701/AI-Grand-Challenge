@@ -187,11 +187,17 @@ app.post("/analyze-multiple-files", async (req, res) => {
 
 
 app.post("/code-block", async (req,res)=>{
+    console.log(`[${new Date().toISOString()}] POST /code-block`);
+    console.log(`[${new Date().toISOString()}] Content-Type: ${req.headers['content-type']}`);
+    
     try {
-        const {codeBlock} = req.body;
+        const {codeBlock, filename} = req.body;
+        console.log(`[${new Date().toISOString()}] Processing single file: ${filename || 'unnamed'}`);
+        console.log(`[${new Date().toISOString()}] Code block length: ${codeBlock ? codeBlock.length : 0} characters`);
         
         // Count tokens before processing
         const tokenCount = await tokenManager.countTokens(codeBlock);
+        console.log(`[${new Date().toISOString()}] Token count: ${tokenCount}`);
         
         // Check if token count exceeds limits
         if (tokenCount > 30000) { // Adjust based on model limits
@@ -202,8 +208,29 @@ app.post("/code-block", async (req,res)=>{
           });
         }
 
-        // Use the generateContent function directly from codeAnalysis.js
-        const rawResponse = await generateContent(codeBlock);
+        // Generate cache key for the code block
+        const cacheKey = getContentHash(codeBlock);
+        console.log(`[${new Date().toISOString()}] Generated cache key: ${cacheKey}`);
+        
+        // Check Redis cache first
+        console.log(`[${new Date().toISOString()}] Checking Redis cache...`);
+        const cachedResult = await redisClient.get(cacheKey);
+        
+        let rawResponse;
+        if (cachedResult) {
+            console.log(`[${new Date().toISOString()}] Cache HIT! Using cached result.`);
+            rawResponse = cachedResult;
+        } else {
+            console.log(`[${new Date().toISOString()}] Cache MISS. Calling AI model...`);
+            
+            // Use the generateContent function directly from codeAnalysis.js
+            rawResponse = await generateContent(codeBlock);
+            
+            // Store in cache
+            console.log(`[${new Date().toISOString()}] Storing result in Redis cache...`);
+            await redisClient.set(cacheKey, rawResponse, { EX: 3600 }); // Cache for 1 hour
+            console.log(`[${new Date().toISOString()}] Result cached successfully.`);
+        }
         
         // Parse the JSON response from the AI model
         let parsedResponse;
