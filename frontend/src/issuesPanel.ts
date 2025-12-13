@@ -20,6 +20,11 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
         case 'navigateTo':
           vscode.commands.executeCommand('secureScan.navigateTo', message.filePath, message.line);
           return;
+        case 'runCommand':
+          if (message.commandId) {
+            vscode.commands.executeCommand(message.commandId);
+          }
+          return;
       }
     });
 
@@ -57,6 +62,18 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
         default: return '⚪';
       }
     };
+
+    const quickActions = [
+      { label: 'Scan Active File', command: 'secureScan.scanActiveFile', title: 'Analyze the currently open editor' },
+      { label: 'Scan Entire Project', command: 'secureScan.scanProject', title: 'Analyze every file in the workspace' },
+      { label: 'Scan Selected Files', command: 'secureScan.scanSelectedFiles', title: 'Pick specific files to analyze' }
+    ];
+
+    const quickActionButtons = quickActions.map(action => `
+      <button class="quick-action" title="${escapeHtml(action.title)}" onclick="runCommand('${action.command}')">
+        ${escapeHtml(action.label)}
+      </button>
+    `).join('');
 
     const listItems = issues.map((issue) => {
       const fileName = issue.filePath.split(/[/\\]/).pop() || issue.filePath;
@@ -114,6 +131,30 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
             font-size: 13px;
           }
           
+          .toolbar {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 16px;
+          }
+
+          .quick-action {
+            flex: 1 1 140px;
+            border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+            background: var(--vscode-button-secondaryBackground);
+            color: var(--vscode-button-secondaryForeground);
+            padding: 6px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: background 0.2s ease, transform 0.1s ease;
+          }
+
+          .quick-action:hover {
+            background: var(--vscode-button-secondaryHoverBackground);
+            transform: translateY(-1px);
+          }
+
           h2 {
             margin: 0 0 15px 0;
             font-size: 16px;
@@ -216,6 +257,9 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
       </head>
       <body>
         <h2>🔒 Security Findings</h2>
+        <div class="toolbar">
+          ${quickActionButtons}
+        </div>
         ${listItems.length > 0 ? listItems : `
           <div class="no-issues">
             <div class="no-issues-icon">✅</div>
@@ -230,6 +274,13 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
               command: 'navigateTo',
               filePath: filePath,
               line: line
+            });
+          }
+
+          function runCommand(commandId) {
+            vscode.postMessage({
+              command: 'runCommand',
+              commandId
             });
           }
         </script>
