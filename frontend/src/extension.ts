@@ -10,6 +10,7 @@ interface SnippetAlignmentResult {
   line: number;
   endLine: number;
   matched: boolean;
+  resolvedText?: string;
 }
 
 const snippetFileLineCache = new Map<string, string[]>();
@@ -140,10 +141,15 @@ function alignSnippetInLines(
     return { line: safeFallback, endLine: safeFallback, matched: false };
   }
 
+  const resolvedStart = Math.max(0, Math.min(bestStart, fileLines.length - 1));
+  const resolvedEnd = Math.max(resolvedStart, Math.min(bestEnd, fileLines.length - 1));
+  const resolvedText = fileLines.slice(resolvedStart, resolvedEnd + 1).join('\n');
+
   return {
-    line: bestStart,
-    endLine: Math.max(bestStart, bestEnd),
-    matched: true
+    line: resolvedStart,
+    endLine: resolvedEnd,
+    matched: true,
+    resolvedText
   };
 }
 
@@ -173,7 +179,8 @@ async function alignSnippetWithFile(
     return {
       line: Math.max(0, fallbackLine),
       endLine: Math.max(0, fallbackLine),
-      matched: false
+      matched: false,
+      resolvedText: snippet
     };
   }
 
@@ -676,7 +683,7 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
           issues.push({
             filePath: filePath,
             line: snippetAlignment.line,
-            code_snippet: vulnerableCode,
+            code_snippet: (snippetAlignment.resolvedText || vulnerableCode).trimEnd(),
             severity: severity,
             vulnerability_explanation: `${titleMatch?.[1]?.trim() || 'Security Issue'}\n\n${issueText}\n\nImpact: ${impactMatch?.[1]?.trim() || 'Security risk'}`,
             recommended_fix: fixMatch ? fixMatch[1].trim().replace(/```\w*\n?/g, '').trim() : 'Review and apply security best practices',
@@ -771,7 +778,7 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
         issues.push({
           filePath: filePath,
           line: snippetAlignment.line,
-          code_snippet: displaySnippet,
+          code_snippet: (snippetAlignment.resolvedText || displaySnippet).trimEnd(),
           severity: severity,
           vulnerability_explanation: `${problem}\n\n${impact}`,
           recommended_fix: fix.replace(/```\w*\n?/g, '').trim(),
