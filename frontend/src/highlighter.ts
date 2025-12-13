@@ -30,6 +30,11 @@ function clampLine(line: number, maxLine: number): number {
 
 export function highlightEntries(editor: vscode.TextEditor, entries: Issue[]): Issue[] {
   clearHighlights(editor);
+  const activeEntries = entries.filter(entry => entry.isActive);
+  if (activeEntries.length === 0) {
+    return [];
+  }
+
   const issuesWithLines: Issue[] = [];
   const maxLineIndex = Math.max(editor.document.lineCount - 1, 0);
 
@@ -40,7 +45,7 @@ export function highlightEntries(editor: vscode.TextEditor, entries: Issue[]): I
     Low: []
   };
 
-  for (const entry of entries) {
+  for (const entry of activeEntries) {
     const startLine = clampLine(entry.line ?? 0, maxLineIndex);
     const snippetLineEstimate = entry.calculatedEndLine !== undefined
       ? Math.max(entry.calculatedEndLine - startLine + 1, 1)

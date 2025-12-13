@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { orchestrateSecurityAnalysis } from "./api";
 import { highlightEntries, clearHighlights } from "./highlighter";
 import { IssuesPanelProvider } from "./issuesPanel";
@@ -57,10 +58,7 @@ function buildSearchOrder(totalLines: number, centerLine: number): number[] {
 }
 
 function fuzzyLineIncludes(fileLine: string, snippetLine: string): boolean {
-  if (!snippetLine) {
-    return false;
-  }
-  if (!fileLine) {
+  if (!snippetLine || !fileLine) {
     return false;
   }
   if (fileLine === snippetLine) {
@@ -185,6 +183,54 @@ async function alignSnippetWithFile(
   }
 
   return alignSnippetInLines(fileLines, snippet, fallbackLine);
+}
+
+async function resolveReportedFile(projectPath: string, reportedFile: string): Promise<string | null> {
+  if (!reportedFile) {
+    return null;
+  }
+
+  const normalized = reportedFile.replace(/\\/g, path.sep).replace(/^\.\/+/, '').trim();
+  const candidates: string[] = [];
+
+  if (path.isAbsolute(normalized)) {
+    candidates.push(path.normalize(normalized));
+  } else {
+    candidates.push(path.normalize(path.join(projectPath, normalized)));
+  }
+
+  // Try each candidate directly
+  for (const candidate of candidates) {
+    try {
+      await vscode.workspace.fs.stat(vscode.Uri.file(candidate));
+      return candidate;
+    } catch {
+      continue;
+    }
+  }
+
+  const baseName = path.basename(normalized);
+  if (!baseName) {
+    return null;
+  }
+
+  try {
+    const foundFiles = await vscode.workspace.findFiles(
+      `**/${baseName}`,
+      '**/{node_modules,.git,dist,build,out,coverage,tmp}/**',
+      10
+    );
+
+    for (const file of foundFiles) {
+      if (normalized === baseName || file.fsPath.endsWith(normalized)) {
+        return file.fsPath;
+      }
+    }
+  } catch (searchError) {
+    console.warn(`File search failed for ${reportedFile}:`, searchError);
+  }
+
+  return null;
 }
 
 /**
@@ -529,7 +575,7 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
   const activeEditorListener = vscode.window.onDidChangeActiveTextEditor(editor => {
     if (editor) {
       const filePath = editor.document.uri.fsPath;
-      const issuesForFile = projectIssues.filter(issue => issue.filePath === filePath);
+      const issuesForFile = projectIssues.filter(issue => issue.filePath === filePath && issue.isActive);
       if (issuesForFile.length > 0) {
         highlightEntries(editor, issuesForFile);
       } else {
@@ -652,16 +698,10 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
           
           console.log(`📄 Format 2 - File: ${fileName}, Line string: "${lineStr}", Parsed line: ${lineNum + 1}`);
           
-          // Find file in workspace
-          let filePath = `${projectPath}/${fileName}`;
-          try {
-            const foundFiles = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 1);
-            if (foundFiles.length > 0) {
-              filePath = foundFiles[0].fsPath;
-              console.log(`✅ Found file: ${filePath}`);
-            }
-          } catch (e) {
-            console.log('Could not search for file');
+          const filePath = await resolveReportedFile(projectPath, fileName);
+          if (!filePath) {
+            console.log(`⚠️ Skipping issue; file not found in workspace: ${fileName}`);
+            continue;
           }
           
           const vulnerableCode = vulnMatch ? vulnMatch[1].trim().replace(/```\w*\n?/g, '').trim() : '';
@@ -689,7 +729,8 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
             recommended_fix: fixMatch ? fixMatch[1].trim().replace(/```\w*\n?/g, '').trim() : 'Review and apply security best practices',
             cve_ids: [],
             cwe_ids: [],
-            calculatedEndLine: snippetAlignment.endLine
+            calculatedEndLine: snippetAlignment.endLine,
+            isActive: false
           });
           
           console.log(`✅ Added Format 2 issue`);
@@ -713,31 +754,10 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
         const parsedLine = parseInt(lineNumber);
         const line = parsedLine > 0 ? parsedLine - 1 : 0; // VS Code uses 0-based indexing
         
-        // Search for the file in workspace
-        let filePath = '';
-        
-        // First, try direct path in project
-        const directPath = `${projectPath}/${fileName}`;
-        console.log(`Trying direct path: ${directPath}`);
-        
-        try {
-          await vscode.workspace.fs.stat(vscode.Uri.file(directPath));
-          filePath = directPath;
-          console.log(`✅ Found file at: ${filePath}`);
-        } catch {
-          // File not found at direct path, search workspace
-          console.log(`❌ Not found at direct path, searching workspace...`);
-          
-          const foundFiles = await vscode.workspace.findFiles(`**/${fileName}`, '**/node_modules/**', 1);
-          
-          if (foundFiles.length > 0) {
-            filePath = foundFiles[0].fsPath;
-            console.log(`✅ Found file via search: ${filePath}`);
-          } else {
-            console.log(`❌ File not found in workspace: ${fileName}`);
-            // Use the direct path anyway, maybe it exists
-            filePath = directPath;
-          }
+        const filePath = await resolveReportedFile(projectPath, fileName);
+        if (!filePath) {
+          console.log(`⚠️ Skipping issue; file not found in workspace: ${fileName}`);
+          continue;
         }
         
         // Extract problem/title
@@ -784,7 +804,8 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
           recommended_fix: fix.replace(/```\w*\n?/g, '').trim(),
           cve_ids: [],
           cwe_ids: [],
-          calculatedEndLine: snippetAlignment.endLine
+          calculatedEndLine: snippetAlignment.endLine,
+          isActive: false
         });
         
       } catch (err) {

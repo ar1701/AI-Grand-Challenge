@@ -53,22 +53,64 @@ function getContentHash(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
+async function computeDirectoryFingerprint(rootPath, maxFiles = 2000) {
+  const hash = crypto.createHash('sha1');
+  const stack = [rootPath];
+  let processed = 0;
+
+  while (stack.length > 0 && processed < maxFiles) {
+    const current = stack.pop();
+    try {
+      const entries = await fs.promises.readdir(current, { withFileTypes: true });
+      for (const entry of entries) {
+        if (['node_modules', '.git', 'dist', 'build', 'out', 'coverage', 'tmp'].includes(entry.name)) {
+          continue;
+        }
+
+        const fullPath = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          stack.push(fullPath);
+        } else if (entry.isFile()) {
+          try {
+            const stats = await fs.promises.stat(fullPath);
+            hash.update(fullPath.replace(rootPath, ''));
+            hash.update(String(stats.mtimeMs));
+            hash.update(String(stats.size));
+            processed++;
+            if (processed >= maxFiles) break;
+          } catch (fileErr) {
+            continue;
+          }
+        }
+      }
+    } catch (dirErr) {
+      continue;
+    }
+  }
+
+  hash.update(`count:${processed}`);
+  return `fp:${hash.digest('hex')}`;
+}
+
 async function getProjectStateSignature(projectPath) {
   try {
     const [headResult, statusResult] = await Promise.all([
       execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectPath }),
       execFileAsync('git', ['status', '--porcelain'], { cwd: projectPath })
     ]);
-    return `${headResult.stdout.trim()}|${statusResult.stdout.trim()}`;
+    const gitSignature = `${headResult.stdout.trim()}|${statusResult.stdout.trim()}`;
+    if (gitSignature.trim()) {
+      return gitSignature;
+    }
   } catch (gitError) {
     console.warn(`[${new Date().toISOString()}] Unable to derive git signature for ${projectPath}: ${gitError.message}`);
-    try {
-      const stats = await fs.promises.stat(projectPath);
-      return `fs:${stats.mtimeMs}`;
-    } catch (fsError) {
-      console.warn(`[${new Date().toISOString()}] Unable to derive filesystem signature for ${projectPath}: ${fsError.message}`);
-      return null;
-    }
+  }
+
+  try {
+    return await computeDirectoryFingerprint(projectPath);
+  } catch (fpError) {
+    console.warn(`[${new Date().toISOString()}] Unable to derive directory fingerprint for ${projectPath}: ${fpError.message}`);
+    return null;
   }
 }
 
@@ -363,7 +405,7 @@ app.post("/orchestrate", async (req, res) => {
         goal,
         projectPath,
         customPrompt: customPrompt || '',
-        projectSignature: projectSignature || 'unknown'
+        projectSignature: projectSignature || `unknown-${Date.now()}`
       };
       orchestratorCacheKey = `orchestrator:${getContentHash(JSON.stringify(cacheIdentity))}`;
       console.log(`[${new Date().toISOString()}] Orchestrator cache key: ${orchestratorCacheKey}`);

@@ -54,6 +54,7 @@ export interface Issue extends AnalyzerEntry {
   line: number;
   // Optional: Calculated end line for precise highlighting
   calculatedEndLine?: number;
+  isActive?: boolean;
 }
 
 // Orchestration types for multi-agent security analysis
