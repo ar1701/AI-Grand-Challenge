@@ -44,6 +44,44 @@ export async function scanSingleFileWithBackend(filename: string, content: strin
 }
 
 /**
+ * Performs comprehensive security analysis using multi-agent orchestration.
+ * Used for the "Security Analysis" command.
+ */
+export async function orchestrateSecurityAnalysis(goal: string, projectPath: string): Promise<any> {
+  const baseUrl = vscode.workspace.getConfiguration().get<string>("secureScan.backendUrl");
+  if (!baseUrl) throw new Error("Backend URL not configured");
+
+  const endpoint = `${baseUrl}/orchestrate`;
+
+  console.log(`🌐 Making orchestration request to: ${endpoint}`);
+  console.log(`📁 Project path: ${projectPath}`);
+  console.log(`🎯 Goal: ${goal.substring(0, 100)}...`);
+
+  try {
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ goal, projectPath })
+    });
+
+    console.log(`📡 Response status: ${res.status}`);
+
+    if (!res.ok) {
+      const errorBody = await res.text();
+      console.error(`❌ Orchestration error response:`, errorBody);
+      throw new Error(`Backend error ${res.status}: ${errorBody}`);
+    }
+
+    const result = await res.json();
+    console.log(`✅ Received orchestration response:`, result);
+    return result;
+  } catch (error) {
+    console.error(`🚨 Orchestration error:`, error);
+    throw error;
+  }
+}
+
+/**
  * Scans an entire project by sending file paths to the backend.
  * Used for the "Scan Entire Project" command.
  */

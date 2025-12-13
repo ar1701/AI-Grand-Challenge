@@ -15,7 +15,6 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
     this._view = view;
     view.webview.options = { enableScripts: true };
 
-    // NEW: Handle messages from the webview (when an issue is clicked)
     view.webview.onDidReceiveMessage(message => {
       switch (message.command) {
         case 'navigateTo':
@@ -35,25 +34,68 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
   }
 
   private _getHtmlForIssues(issues: Issue[]): string {
-    const listItems = issues.map((issue) => {
-      const escapeHtml = (unsafe: string) => {
-        return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
-      };
-      
-      const fileName = issue.filePath.split(/[/\\]/).pop() || issue.filePath;
+    const escapeHtml = (unsafe: string) => {
+      return unsafe.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;");
+    };
+    
+    const getSeverityColor = (severity: string) => {
+      switch(severity.toLowerCase()) {
+        case 'critical': return '#f14c4c';
+        case 'high': return '#ff8800';
+        case 'medium': return '#e3b341';
+        case 'low': return '#4ec9b0';
+        default: return '#858585';
+      }
+    };
 
-      // MODIFIED: Added onclick and data attributes to the list item
+    const getSeverityEmoji = (severity: string) => {
+      switch(severity.toLowerCase()) {
+        case 'critical': return '🔴';
+        case 'high': return '🟠';
+        case 'medium': return '🟡';
+        case 'low': return '🔵';
+        default: return '⚪';
+      }
+    };
+
+    const listItems = issues.map((issue) => {
+      const fileName = issue.filePath.split(/[/\\]/).pop() || issue.filePath;
+      const severityColor = getSeverityColor(issue.severity);
+      const severityEmoji = getSeverityEmoji(issue.severity);
+      const lineNumber = issue.line + 1;
+
       return `
-      <li 
+      <div 
         class="issue-item"
         onclick="navigateTo('${escapeHtml(issue.filePath)}', ${issue.line})"
-        title="Click to navigate to ${escapeHtml(fileName)} line ${issue.line + 1}"
+        title="Click to open ${escapeHtml(fileName)}:${lineNumber}"
       >
-        <p><strong>File:</strong> ${escapeHtml(fileName)} (line ${issue.line + 1})</p>
-        <strong>Severity:</strong> ${escapeHtml(issue.severity)} <br/>
-        <pre>${escapeHtml(issue.code_snippet)}</pre>
-        <p><strong>Explanation:</strong> ${escapeHtml(issue.vulnerability_explanation)}</p>
-      </li>
+        <div class="issue-header">
+          <span class="severity" style="color: ${severityColor};">${severityEmoji} ${escapeHtml(issue.severity.toUpperCase())}</span>
+          <span class="file-location">${escapeHtml(fileName)}:${lineNumber}</span>
+        </div>
+        
+        <div class="issue-body">
+          <div class="section">
+            <strong>Problem:</strong>
+            <p>${escapeHtml(issue.vulnerability_explanation)}</p>
+          </div>
+          
+          ${issue.code_snippet ? `
+          <div class="section">
+            <strong>Vulnerable Code:</strong>
+            <pre class="code-block">${escapeHtml(issue.code_snippet)}</pre>
+          </div>
+          ` : ''}
+          
+          ${issue.recommended_fix ? `
+          <div class="section">
+            <strong>Fix:</strong>
+            <pre class="code-block fix">${escapeHtml(issue.recommended_fix)}</pre>
+          </div>
+          ` : ''}
+        </div>
+      </div>
     `;
     }).join("");
 
@@ -64,24 +106,122 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <style>
-          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; padding: 10px; color: #ccc; }
-          ul { list-style-type: none; padding: 0; }
-          li.issue-item { 
-            margin-bottom: 15px; 
+          body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
             padding: 10px; 
-            border: 1px solid #333; 
-            border-radius: 5px;
-            cursor: pointer;
-            transition: background-color 0.2s;
+            color: var(--vscode-foreground);
+            background: var(--vscode-editor-background);
+            font-size: 13px;
           }
-          li.issue-item:hover { background-color: #333; }
-          p { margin-top: 5px; margin-bottom: 5px; }
-          pre { background:#222; color:#eee; padding:8px; border-radius:3px; white-space: pre-wrap; word-wrap: break-word; }
+          
+          h2 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--vscode-foreground);
+          }
+          
+          .issue-item { 
+            margin-bottom: 12px; 
+            padding: 12px; 
+            background: var(--vscode-editor-inactiveSelectionBackground);
+            border-left: 3px solid var(--vscode-textLink-foreground);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.2s;
+          }
+          
+          .issue-item:hover { 
+            background: var(--vscode-list-hoverBackground);
+            transform: translateX(2px);
+          }
+          
+          .issue-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+            font-size: 12px;
+          }
+          
+          .severity {
+            font-weight: bold;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+          }
+          
+          .file-location {
+            opacity: 0.8;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+          }
+          
+          .issue-body {
+            font-size: 12px;
+          }
+          
+          .section {
+            margin-bottom: 10px;
+          }
+          
+          .section:last-child {
+            margin-bottom: 0;
+          }
+          
+          .section strong {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--vscode-textLink-foreground);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+          }
+          
+          .section p {
+            margin: 0;
+            line-height: 1.5;
+            color: var(--vscode-foreground);
+          }
+          
+          .code-block {
+            background: var(--vscode-textCodeBlock-background);
+            color: var(--vscode-editor-foreground);
+            padding: 8px;
+            border-radius: 3px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', monospace;
+            font-size: 11px;
+            line-height: 1.4;
+            margin: 4px 0 0 0;
+            border: 1px solid var(--vscode-panel-border);
+          }
+          
+          .code-block.fix {
+            border-left: 3px solid #4ec9b0;
+          }
+          
+          .no-issues {
+            text-align: center;
+            padding: 40px 20px;
+            color: var(--vscode-descriptionForeground);
+            font-size: 13px;
+          }
+          
+          .no-issues-icon {
+            font-size: 48px;
+            margin-bottom: 10px;
+          }
         </style>
       </head>
       <body>
-        <h2>🔍 SecureScan Issues</h2>
-        <ul>${listItems.length > 0 ? listItems : "<li>No issues found.</li>"}</ul>
+        <h2>🔒 Security Findings</h2>
+        ${listItems.length > 0 ? listItems : `
+          <div class="no-issues">
+            <div class="no-issues-icon">✅</div>
+            <div>No security issues found.</div>
+          </div>
+        `}
         
         <script>
           const vscode = acquireVsCodeApi();

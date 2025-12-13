@@ -1,7 +1,7 @@
 {
   "name": "vscode-secure-code-analyzer",
   "displayName": "Secure Code Analyzer",
-  "description": "Analyzes code with backend and highlights vulnerabilities by severity.",
+  "description": "Multi-agent AI security analysis using orchestrator for comprehensive vulnerability scanning.",
   "version": "1.0.0",
   "publisher": "your-name",
   "engines": {
@@ -16,19 +16,15 @@
     "commands": [
       {
         "command": "secureScan.scanActiveFile",
-        "title": "Secure Scan: Scan Active File"
+        "title": "🔒 Security Analysis: Active File"
       },
       {
         "command": "secureScan.scanProject",
-        "title": "Secure Scan: Scan Entire Project"
+        "title": "🔒 Security Analysis: Entire Project"
       },
       {
         "command": "secureScan.scanSelectedFiles",
-        "title": "Secure Scan: Scan Selected Files"
-      },
-      {
-        "command": "secureScan.toggleAutoScanOnSave",
-        "title": "Secure Scan: Toggle Auto Scan on Save"
+        "title": "🔒 Security Analysis: Select Files"
       }
     ],
     "configuration": {

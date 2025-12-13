@@ -16,6 +16,10 @@ const path = require('path')
 const TokenManager = require('./utils/tokenManager')
 const { analyzeMultipleFilesWithOpenAI } = require('./utils/openaiAnalysis.js');
 
+// Import orchestration system
+const { OrchestratorAgent, agentManager } = require('./agents');
+const { executeTool } = require('./tools');
+
 app.use(express.json({ limit: '50mb' })); 
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -273,6 +277,218 @@ app.post("/code-block", async (req,res)=>{
         });
     }
 })
+
+// ============================================================================
+// ORCHESTRATION SYSTEM API ENDPOINTS
+// (Now supports both Gemini and OpenAI)
+// ============================================================================
+
+/**
+ * POST /orchestrate
+ * Main endpoint for the orchestration system
+ * Receives: system prompt (optional), user goal, and project path
+ * Works with both Gemini and OpenAI based on ANALYSIS_ENGINE setting
+ */
+app.post("/orchestrate", async (req, res) => {
+  console.log(`[${new Date().toISOString()}] POST /orchestrate (Engine: ${selectedEngine})`);
+  
+  try {
+    let { goal, projectPath, customPrompt } = req.body;
+    
+    // Validate required parameters
+    if (!goal) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameter: goal"
+      });
+    }
+
+    if (!projectPath) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameter: projectPath"
+      });
+    }
+
+    // Check if goal is a file path and read it automatically
+    if (typeof goal === 'string' && (goal.endsWith('.txt') || goal.endsWith('.md')) && fs.existsSync(goal)) {
+      console.log(`[${new Date().toISOString()}] Reading goal from file: ${goal}`);
+      try {
+        goal = fs.readFileSync(goal, 'utf-8');
+        console.log(`[${new Date().toISOString()}] Successfully loaded goal from file (${goal.length} characters)`);
+      } catch (error) {
+        return res.status(400).json({
+          success: false,
+          error: `Failed to read goal file: ${error.message}`
+        });
+      }
+    }
+
+    // Validate project path exists
+    if (!fs.existsSync(projectPath)) {
+      return res.status(400).json({
+        success: false,
+        error: `Project path does not exist: ${projectPath}`
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] Orchestrating task for: ${projectPath}`);
+    console.log(`[${new Date().toISOString()}] Goal length: ${goal.length} characters`);
+
+    // Create orchestrator agent
+    const orchestrator = new OrchestratorAgent();
+    
+    // Execute the task
+    const result = await orchestrator.execute(goal, projectPath);
+
+    return res.json({
+      success: result.success,
+      result: result.result,
+      spawnedAgents: result.spawnedAgents || [],
+      agentResults: result.agentResults || [],
+      conversationTurns: result.conversationTurns || 0,
+      error: result.error
+    });
+  } catch (error) {
+    console.error(`[${new Date().toISOString()}] Error in /orchestrate:`, error);
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /agents
+ * Get status of all spawned agents
+ */
+app.get("/agents", async (req, res) => {
+  try {
+    const summary = agentManager.getSummary();
+    return res.json(summary);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /agents/:agentId
+ * Get status of a specific agent
+ */
+app.get("/agents/:agentId", async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const status = agentManager.getAgentStatus(agentId);
+    return res.json(status);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /agents/:agentId/result
+ * Get result of a completed agent
+ */
+app.get("/agents/:agentId/result", async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const result = agentManager.getAgentResult(agentId);
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /agents/:agentId/history
+ * Get tool call history of an agent
+ */
+app.get("/agents/:agentId/history", async (req, res) => {
+  try {
+    const { agentId } = req.params;
+    const history = agentManager.getAgentHistory(agentId);
+    return res.json(history);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * POST /tools/execute
+ * Direct tool execution endpoint for testing
+ */
+app.post("/tools/execute", async (req, res) => {
+  try {
+    const { toolName, params } = req.body;
+    
+    if (!toolName) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required parameter: toolName"
+      });
+    }
+
+    console.log(`[${new Date().toISOString()}] Executing tool: ${toolName}`);
+    
+    const result = await executeTool(toolName, params || {});
+    
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /agents
+ * Clear all completed agents
+ */
+app.delete("/agents/completed", async (req, res) => {
+  try {
+    const result = agentManager.clearCompleted();
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+/**
+ * DELETE /agents
+ * Clear all agents and reset
+ */
+app.delete("/agents", async (req, res) => {
+  try {
+    const result = agentManager.clearAll();
+    return res.json(result);
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+});
+
+// ============================================================================
+// END ORCHESTRATION SYSTEM API ENDPOINTS
+// ============================================================================
+
 
 app.get('/', (req,res)=>{
     res.json("Hello, this is an express server !")

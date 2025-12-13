@@ -51,5 +51,63 @@ export interface ProjectScanResponse {
 export interface Issue extends AnalyzerEntry {
   filePath: string;
   // NEW: Add line number for navigation
-  line: number; 
+  line: number;
+  // Optional: Calculated end line for precise highlighting
+  calculatedEndLine?: number;
+}
+
+// Orchestration types for multi-agent security analysis
+export interface SpawnedAgent {
+  agentId: string;
+  purpose: string;
+  spawnedAt?: string;
+}
+
+export interface ToolCall {
+  tool: string;
+  success: boolean;
+  timestamp: string;
+  hasResult?: boolean;
+}
+
+export interface AgentResult {
+  agentId: string;
+  purpose: string;
+  success: boolean;
+  result?: {
+    type: string;
+    message: string;
+    iterations?: number;
+    toolCallCount?: number;
+  };
+  executionTime?: number;
+  toolCallCount?: number;
+  toolHistory?: ToolCall[];
+  error?: string;
+}
+
+export interface OrchestrationResponse {
+  success: boolean;
+  result: {
+    type: string;
+    message: string;
+  };
+  spawnedAgents: SpawnedAgent[];
+  agentResults: AgentResult[];
+  orchestratorToolHistory?: ToolCall[];
+  conversationTurns: number;
+  error?: string;
+}
+
+// Parsed security finding from agent analysis
+export interface SecurityFinding {
+  severity: 'CRITICAL' | 'HIGH' | 'MEDIUM' | 'LOW';
+  title: string;
+  file: string;
+  line: string;
+  vulnerableCode: string;
+  issue: string;
+  fix: string;
+  impact: string;
+  agentId: string;
 }
