@@ -6,6 +6,180 @@ import { Issue, OrchestrationResponse, AgentResult, ToolCall } from "./types";
 
 let projectIssues: Issue[] = [];
 
+interface SnippetAlignmentResult {
+  line: number;
+  endLine: number;
+  matched: boolean;
+}
+
+const snippetFileLineCache = new Map<string, string[]>();
+
+function normalizeLineForMatch(line: string): string {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return "";
+  }
+
+  const commentPrefixes = ["//", "#", "/*", "*", "--"];
+  if (commentPrefixes.some(prefix => trimmed.startsWith(prefix))) {
+    return "";
+  }
+
+  return trimmed.replace(/\s+/g, " ").toLowerCase();
+}
+
+function buildSnippetComparableLines(snippet: string): string[] {
+  return snippet
+    .replace(/\r/g, "")
+    .split("\n")
+    .map(normalizeLineForMatch)
+    .filter(line => line.length > 3);
+}
+
+function buildSearchOrder(totalLines: number, centerLine: number): number[] {
+  const indices: number[] = [];
+  const maxDelta = Math.max(centerLine, totalLines - centerLine);
+  for (let delta = 0; delta <= maxDelta; delta++) {
+    const down = centerLine - delta;
+    if (down >= 0) {
+      indices.push(down);
+    }
+    if (delta === 0) {
+      continue;
+    }
+    const up = centerLine + delta;
+    if (up < totalLines) {
+      indices.push(up);
+    }
+  }
+  return indices;
+}
+
+function fuzzyLineIncludes(fileLine: string, snippetLine: string): boolean {
+  if (!snippetLine) {
+    return false;
+  }
+  if (!fileLine) {
+    return false;
+  }
+  if (fileLine === snippetLine) {
+    return true;
+  }
+  if (fileLine.includes(snippetLine)) {
+    return true;
+  }
+  if (snippetLine.length >= 8) {
+    const prefixLength = Math.max(6, Math.floor(snippetLine.length * 0.6));
+    return fileLine.includes(snippetLine.slice(0, prefixLength));
+  }
+  return false;
+}
+
+function alignSnippetInLines(
+  fileLines: string[],
+  snippet: string,
+  fallbackLine: number
+): SnippetAlignmentResult {
+  if (fileLines.length === 0) {
+    return { line: 0, endLine: 0, matched: false };
+  }
+
+  const normalizedFileLines = fileLines.map(normalizeLineForMatch);
+  const snippetLines = buildSnippetComparableLines(snippet);
+  const safeFallback = Math.min(
+    Math.max(Number.isFinite(fallbackLine) ? fallbackLine : 0, 0),
+    fileLines.length - 1
+  );
+
+  if (snippetLines.length === 0) {
+    return { line: safeFallback, endLine: safeFallback, matched: false };
+  }
+
+  const searchOrder = buildSearchOrder(normalizedFileLines.length, safeFallback);
+  let bestScore = -Infinity;
+  let bestStart = safeFallback;
+  let bestEnd = safeFallback;
+  let bestMatched = false;
+
+  for (const startIdx of searchOrder) {
+    if (!fuzzyLineIncludes(normalizedFileLines[startIdx], snippetLines[0])) {
+      continue;
+    }
+
+    let matches = 1;
+    let endIdx = startIdx;
+
+    for (let offset = 1; offset < snippetLines.length; offset++) {
+      const fileIdx = startIdx + offset;
+      if (fileIdx >= normalizedFileLines.length) {
+        break;
+      }
+
+      if (fuzzyLineIncludes(normalizedFileLines[fileIdx], snippetLines[offset])) {
+        matches++;
+        endIdx = fileIdx;
+      } else {
+        break;
+      }
+    }
+
+    const score = matches * 100 - Math.abs(startIdx - safeFallback);
+    if (score > bestScore) {
+      bestScore = score;
+      bestStart = startIdx;
+      bestEnd = endIdx;
+      bestMatched = true;
+    }
+
+    if (matches >= Math.min(snippetLines.length, 3)) {
+      break;
+    }
+  }
+
+  if (!bestMatched) {
+    return { line: safeFallback, endLine: safeFallback, matched: false };
+  }
+
+  return {
+    line: bestStart,
+    endLine: Math.max(bestStart, bestEnd),
+    matched: true
+  };
+}
+
+async function getFileLines(filePath: string): Promise<string[] | null> {
+  if (snippetFileLineCache.has(filePath)) {
+    return snippetFileLineCache.get(filePath)!;
+  }
+
+  try {
+    const document = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+    const lines = document.getText().replace(/\r/g, "").split("\n");
+    snippetFileLineCache.set(filePath, lines);
+    return lines;
+  } catch (error) {
+    console.warn(`Unable to cache lines for ${filePath}`, error);
+    return null;
+  }
+}
+
+async function alignSnippetWithFile(
+  filePath: string,
+  snippet: string,
+  fallbackLine: number
+): Promise<SnippetAlignmentResult> {
+  const fileLines = await getFileLines(filePath);
+  if (!fileLines) {
+    return {
+      line: Math.max(0, fallbackLine),
+      endLine: Math.max(0, fallbackLine),
+      matched: false
+    };
+  }
+
+  return alignSnippetInLines(fileLines, snippet, fallbackLine);
+}
+
 /**
  * Display the nested tool call tree in console
  */
@@ -227,168 +401,73 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
     try {
       console.log(`\n🔍 ===== NAVIGATION DEBUG =====`);
       console.log(`Target: ${filePath}, reported line: ${line + 1}`);
-      
+
       const uri = vscode.Uri.file(filePath);
       const doc = await vscode.workspace.openTextDocument(uri);
       const editor = await vscode.window.showTextDocument(doc);
-      
-      // Find the issue for this file and line
+      const fileLines = doc.getText().split('\n');
+
       let issue = projectIssues.find(i => i.filePath === filePath && i.line === line);
-      
+
       if (!issue) {
         console.log(`⚠️ No exact match, searching nearby lines...`);
         issue = projectIssues.find(i => i.filePath === filePath && Math.abs(i.line - line) <= 10);
       }
-      
-      let targetLine = line;
-      
+
+      let targetLine = Math.max(0, Math.min(issue ? issue.line : line, doc.lineCount - 1));
+
       if (issue && issue.code_snippet) {
         console.log(`\n📝 Issue found with code snippet (${issue.code_snippet.length} chars)`);
-        console.log(`Snippet:\n${issue.code_snippet.substring(0, 200)}`);
-        
-        // Extract the most distinctive line from the snippet (usually the longest non-comment line)
-        const snippetLines = issue.code_snippet
-          .replace(/```\w*\n?/g, '') // Remove code blocks
-          .split('\n')
-          .map(l => l.trim())
-          .filter(l => 
-            l.length > 10 && // At least 10 chars
-            !l.startsWith('//') && 
-            !l.startsWith('#') &&
-            !l.startsWith('/*') &&
-            !l.startsWith('*')
-          );
-        
-        console.log(`\n🔎 Searching for these lines:`);
-        snippetLines.forEach((l, i) => console.log(`  ${i + 1}. ${l.substring(0, 60)}`));
-        
-        if (snippetLines.length > 0) {
-          const fileText = doc.getText();
-          const fileLines = fileText.split('\n');
-          
-          // Try to find the first distinctive line
-          const searchLine = snippetLines[0];
-          console.log(`\n🎯 Primary search line: "${searchLine.substring(0, 80)}"`);
-          
-          let foundLine = -1;
-          
-          // Search for exact or very close match
-          for (let i = 0; i < fileLines.length; i++) {
-            const fileLine = fileLines[i].trim();
-            
-            // Try exact match
-            if (fileLine === searchLine) {
-              foundLine = i;
-              console.log(`✅ EXACT MATCH at line ${i + 1}`);
-              break;
-            }
-            
-            // Try partial match (at least 80% of the search line)
-            const minMatchLength = Math.floor(searchLine.length * 0.8);
-            if (searchLine.length > 15 && fileLine.includes(searchLine.substring(0, minMatchLength))) {
-              foundLine = i;
-              console.log(`✅ PARTIAL MATCH at line ${i + 1} (80%+ match)`);
-              break;
-            }
-          }
-          
-          // If still not found, try finding any of the snippet lines
-          if (foundLine === -1 && snippetLines.length > 1) {
-            console.log(`⚠️ Primary line not found, trying other lines...`);
-            
-            for (let i = 0; i < fileLines.length; i++) {
-              const fileLine = fileLines[i].trim();
-              
-              for (const snippetLine of snippetLines) {
-                if (snippetLine.length > 15 && fileLine === snippetLine) {
-                  foundLine = i;
-                  console.log(`✅ FOUND ALTERNATIVE LINE at ${i + 1}: "${snippetLine.substring(0, 60)}"`);
-                  break;
-                }
-              }
-              
-              if (foundLine !== -1) break;
-            }
-          }
-          
-          if (foundLine >= 0) {
-            targetLine = foundLine;
-            console.log(`\n🎯 Final target line: ${targetLine + 1} (was: ${line + 1})`);
-            
-            // Now find the exact end line by matching the code snippet
-            let endLine = targetLine;
-            const snippetNonEmptyLines = issue.code_snippet
-              .replace(/```\w*\n?/g, '')
-              .split('\n')
-              .filter(l => l.trim().length > 0);
-            
-            // Try to find where the snippet actually ends in the file
-            let matchedLines = 0;
-            for (let i = targetLine; i < Math.min(targetLine + 20, fileLines.length); i++) {
-              const fileLine = fileLines[i].trim();
-              if (fileLine.length === 0) continue;
-              
-              // Check if this file line matches any snippet line
-              const hasMatch = snippetNonEmptyLines.some(snippetLine => 
-                snippetLine.length > 10 && (
-                  fileLine === snippetLine ||
-                  fileLine.includes(snippetLine) ||
-                  snippetLine.includes(fileLine)
-                )
-              );
-              
-              if (hasMatch) {
-                matchedLines++;
-                endLine = i;
-              } else if (matchedLines > 0) {
-                // Stop if we've matched some lines and now found a non-match
-                break;
-              }
-            }
-            
-            // Store the calculated end line for later use
-            issue.calculatedEndLine = endLine;
-            console.log(`📏 Calculated snippet spans lines ${targetLine + 1} to ${endLine + 1} (${endLine - targetLine + 1} lines)`);
-          } else {
-            console.log(`\n⚠️ Could not find code in file, using reported line ${line + 1}`);
-            targetLine = Math.max(0, Math.min(line, doc.lineCount - 1));
-          }
+        const needsAlignment =
+          issue.calculatedEndLine === undefined || issue.calculatedEndLine < issue.line;
+        const alignment = needsAlignment
+          ? alignSnippetInLines(fileLines, issue.code_snippet, targetLine)
+          : { line: issue.line, endLine: issue.calculatedEndLine ?? issue.line, matched: true };
+
+        if (alignment.matched) {
+          targetLine = alignment.line;
+          issue.line = alignment.line;
+          issue.calculatedEndLine = alignment.endLine;
+          console.log(`🎯 Aligned snippet to lines ${alignment.line + 1}-${alignment.endLine + 1}`);
+        } else {
+          console.log(`⚠️ Could not align snippet, falling back to stored line ${targetLine + 1}`);
         }
-      } else {
-        console.log(`\n⚠️ No code snippet available, using reported line`);
-        targetLine = Math.max(0, Math.min(line, doc.lineCount - 1));
+      } else if (!issue) {
+        console.log(`\n⚠️ No corresponding issue entry, using reported line`);
       }
-      
+
       const position = new vscode.Position(targetLine, 0);
       console.log(`\n📍 Navigating to line ${targetLine + 1}`);
       console.log(`Actual file line: "${doc.lineAt(targetLine).text.substring(0, 80)}"`);
-      
+
       if (issue) {
-        // Calculate how many lines to highlight
         let endLine: number;
-        
+
         if (issue.calculatedEndLine !== undefined && issue.calculatedEndLine >= targetLine) {
-          // Use the precisely calculated end line from code search
           endLine = Math.min(issue.calculatedEndLine, doc.lineCount - 1);
-          console.log(`Using calculated end line: ${endLine + 1}`);
-        } else {
-          // Fallback: estimate based on snippet line count
-          const snippetLineCount = issue.code_snippet.split('\n').filter(l => l.trim().length > 0).length;
+          console.log(`Using cached end line: ${endLine + 1}`);
+        } else if (issue.code_snippet) {
+          const snippetLineCount = issue.code_snippet
+            .replace(/```\w*\n?/g, '')
+            .split('\n')
+            .filter(l => l.trim().length > 0)
+            .length;
           endLine = Math.min(targetLine + Math.max(0, snippetLineCount - 1), doc.lineCount - 1);
-          console.log(`Using estimated end line: ${endLine + 1} (${snippetLineCount} snippet lines)`);
+          console.log(`Estimating end line via snippet length: ${endLine + 1}`);
+        } else {
+          endLine = targetLine;
         }
-        
+
         const range = new vscode.Range(
           new vscode.Position(targetLine, 0),
           new vscode.Position(endLine, doc.lineAt(endLine).text.length)
         );
-        
+
         console.log(`Highlighting lines ${targetLine + 1} to ${endLine + 1} (${endLine - targetLine + 1} lines)`);
-        
-        // Create decoration based on severity
+
         let backgroundColor: string;
         let borderColor: string;
-        
+
         switch (issue.severity) {
           case 'Critical':
             backgroundColor = 'rgba(255, 76, 76, 0.3)';
@@ -410,7 +489,7 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
             backgroundColor = 'rgba(133, 133, 133, 0.2)';
             borderColor = 'rgba(133, 133, 133, 0.6)';
         }
-        
+
         const decorationType = vscode.window.createTextEditorDecorationType({
           backgroundColor: backgroundColor,
           isWholeLine: false,
@@ -420,19 +499,18 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
           overviewRulerColor: borderColor,
           overviewRulerLane: vscode.OverviewRulerLane.Right
         });
-        
+
         editor.setDecorations(decorationType, [range]);
         console.log(`✅ Applied ${issue.severity} decoration`);
-        
-        // Clear decoration after 5 seconds
+
         setTimeout(() => {
           decorationType.dispose();
         }, 5000);
       }
-      
+
       editor.selection = new vscode.Selection(position, position);
       editor.revealRange(new vscode.Range(position, position), vscode.TextEditorRevealType.InCenter);
-      
+
       console.log(`===== END NAVIGATION DEBUG =====\n`);
     } catch (error) {
       console.error("Failed to navigate:", error);
@@ -467,6 +545,7 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
  */
 async function parseSecurityFindings(response: OrchestrationResponse, projectPath: string): Promise<Issue[]> {
   const issues: Issue[] = [];
+  snippetFileLineCache.clear();
   
   console.log('🔍 Parsing security findings...');
   console.log('Project Path:', projectPath);
@@ -579,63 +658,31 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
           }
           
           const vulnerableCode = vulnMatch ? vulnMatch[1].trim().replace(/```\w*\n?/g, '').trim() : '';
-          
-          // Skip issues without proper vulnerable code
+
           if (!vulnerableCode || vulnerableCode.length < 10) {
             console.log(`⚠️ No valid vulnerable code found (length: ${vulnerableCode.length}), skipping issue`);
             continue;
           }
-          
+
           console.log(`Vulnerable code (first 100 chars): ${vulnerableCode.substring(0, 100)}`);
 
-          // Try to refine the line number by searching for the vulnerable code in the file.
-          // This helps when the agent's reported line is slightly off.
-          let refinedLineNum = lineNum;
-          try {
-            const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
-            const fileLines = doc.getText().split('\n');
-            
-            const snippetLines = vulnerableCode
-              .split('\n')
-              .map(l => l.trim())
-              .filter(l => l.length > 10);
-            
-            if (snippetLines.length > 0) {
-              const searchLine = snippetLines[0];
-              let found = -1;
-              const minMatchLength = Math.floor(searchLine.length * 0.8);
-              
-              for (let i = 0; i < fileLines.length; i++) {
-                const fileLine = fileLines[i].trim();
-                if (fileLine === searchLine) {
-                  found = i;
-                  console.log(`🔁 Refined line number via exact match: ${i + 1}`);
-                  break;
-                }
-                if (searchLine.length > 15 && fileLine.includes(searchLine.substring(0, minMatchLength))) {
-                  found = i;
-                  console.log(`🔁 Refined line number via partial match: ${i + 1}`);
-                  break;
-                }
-              }
-              
-              if (found >= 0) {
-                refinedLineNum = found;
-              }
-            }
-          } catch (e) {
-            console.log('⚠️ Could not open file to refine line number:', e);
+          const snippetAlignment = await alignSnippetWithFile(filePath, vulnerableCode, lineNum);
+          if (snippetAlignment.matched) {
+            console.log(`🔁 Refined snippet to lines ${snippetAlignment.line + 1}-${snippetAlignment.endLine + 1}`);
+          } else {
+            console.log(`⚠️ Unable to refine snippet, using provided line ${lineNum + 1}`);
           }
-          
+
           issues.push({
             filePath: filePath,
-            line: refinedLineNum,
+            line: snippetAlignment.line,
             code_snippet: vulnerableCode,
             severity: severity,
             vulnerability_explanation: `${titleMatch?.[1]?.trim() || 'Security Issue'}\n\n${issueText}\n\nImpact: ${impactMatch?.[1]?.trim() || 'Security risk'}`,
             recommended_fix: fixMatch ? fixMatch[1].trim().replace(/```\w*\n?/g, '').trim() : 'Review and apply security best practices',
             cve_ids: [],
-            cwe_ids: []
+            cwe_ids: [],
+            calculatedEndLine: snippetAlignment.endLine
           });
           
           console.log(`✅ Added Format 2 issue`);
@@ -692,9 +739,11 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
         
         // Extract vulnerable code
         const vulnCodeMatch = block.match(/Vulnerable Code:\s*([\s\S]*?)(?=\n(?:Fix:|Impact:)|$)/i);
-        const vulnerableCode = vulnCodeMatch ? vulnCodeMatch[1].trim() : 'See details';
+        const rawSnippet = vulnCodeMatch ? vulnCodeMatch[1].trim() : '';
+        const displaySnippet = rawSnippet
+          ? rawSnippet.replace(/```\w*\n?/g, '').replace(/```/g, '').trim()
+          : 'See details';
         
-        // Extract fix
         const fixMatch = block.match(/Fix:\s*([\s\S]*?)(?=\n(?:Impact:|$)|---)/i);
         const fix = fixMatch ? fixMatch[1].trim() : 'Review the code';
         
@@ -702,17 +751,33 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
         const impactMatch = block.match(/Impact:\s*([^\n]+(?:\n(?!---)[^\n]+)*)/i);
         const impact = impactMatch ? impactMatch[1].trim() : 'Security vulnerability';
         
-        console.log(`✅ Adding issue: ${problem} in ${filePath} at line ${line + 1}`);
+        let snippetAlignment: SnippetAlignmentResult = {
+          line,
+          endLine: line,
+          matched: false
+        };
+
+        if (displaySnippet && displaySnippet.length >= 5 && displaySnippet !== 'See details') {
+          snippetAlignment = await alignSnippetWithFile(filePath, displaySnippet, line);
+          if (snippetAlignment.matched) {
+            console.log(`🔁 Refined Format 1 snippet to lines ${snippetAlignment.line + 1}-${snippetAlignment.endLine + 1}`);
+          } else {
+            console.log(`⚠️ Could not align Format 1 snippet, using reported line ${line + 1}`);
+          }
+        }
+
+        console.log(`✅ Adding issue: ${problem} in ${filePath} at line ${snippetAlignment.line + 1}`);
         
         issues.push({
           filePath: filePath,
-          line: line,
-          code_snippet: vulnerableCode.replace(/```\w*\n?/g, '').trim(),
+          line: snippetAlignment.line,
+          code_snippet: displaySnippet,
           severity: severity,
           vulnerability_explanation: `${problem}\n\n${impact}`,
           recommended_fix: fix.replace(/```\w*\n?/g, '').trim(),
           cve_ids: [],
-          cwe_ids: []
+          cwe_ids: [],
+          calculatedEndLine: snippetAlignment.endLine
         });
         
       } catch (err) {
