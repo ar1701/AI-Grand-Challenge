@@ -5,6 +5,9 @@ const port = process.env.PORT
 const apiKey = process.env.GEMINI_API_KEY
 const selectedEngine = process.env.ANALYSIS_ENGINE || 'gemini';
 const crypto = require('crypto');
+const util = require('util');
+const { execFile } = require('child_process');
+const execFileAsync = util.promisify(execFile);
 const { redisClient, connectRedis } = require('./utils/redisClient');
 console.log(`Server configured to use analysis engine: ${selectedEngine.toUpperCase()}`);
 
@@ -48,6 +51,25 @@ const tokenManager = new TokenManager(genAI);
 
 function getContentHash(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
+}
+
+async function getProjectStateSignature(projectPath) {
+  try {
+    const [headResult, statusResult] = await Promise.all([
+      execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectPath }),
+      execFileAsync('git', ['status', '--porcelain'], { cwd: projectPath })
+    ]);
+    return `${headResult.stdout.trim()}|${statusResult.stdout.trim()}`;
+  } catch (gitError) {
+    console.warn(`[${new Date().toISOString()}] Unable to derive git signature for ${projectPath}: ${gitError.message}`);
+    try {
+      const stats = await fs.promises.stat(projectPath);
+      return `fs:${stats.mtimeMs}`;
+    } catch (fsError) {
+      console.warn(`[${new Date().toISOString()}] Unable to derive filesystem signature for ${projectPath}: ${fsError.message}`);
+      return null;
+    }
+  }
 }
 
 // app.post("/analyze-multiple-files", async (req, res) => {
@@ -332,6 +354,43 @@ app.post("/orchestrate", async (req, res) => {
       });
     }
 
+    // Build cache identity (goal + project state + engine) to reuse orchestrator work when nothing changed
+    let orchestratorCacheKey = null;
+    try {
+      const projectSignature = await getProjectStateSignature(projectPath);
+      const cacheIdentity = {
+        engine: selectedEngine,
+        goal,
+        projectPath,
+        customPrompt: customPrompt || '',
+        projectSignature: projectSignature || 'unknown'
+      };
+      orchestratorCacheKey = `orchestrator:${getContentHash(JSON.stringify(cacheIdentity))}`;
+      console.log(`[${new Date().toISOString()}] Orchestrator cache key: ${orchestratorCacheKey}`);
+      if (projectSignature) {
+        console.log(`[${new Date().toISOString()}] Project signature: ${projectSignature.substring(0, 80)}${projectSignature.length > 80 ? '...' : ''}`);
+      }
+    } catch (signatureError) {
+      console.warn(`[${new Date().toISOString()}] Unable to build orchestrator cache identity: ${signatureError.message}`);
+    }
+
+    if (orchestratorCacheKey) {
+      try {
+        const cachedPayload = await redisClient.get(orchestratorCacheKey);
+        if (cachedPayload) {
+          console.log(`[${new Date().toISOString()}] ✅ Orchestrator cache HIT (${orchestratorCacheKey})`);
+          try {
+            return res.json(JSON.parse(cachedPayload));
+          } catch (parseError) {
+            console.warn(`[${new Date().toISOString()}] Cached orchestrator payload malformed: ${parseError.message}`);
+          }
+        }
+        console.log(`[${new Date().toISOString()}] ⚠️ Orchestrator cache MISS (${orchestratorCacheKey})`);
+      } catch (cacheError) {
+        console.warn(`[${new Date().toISOString()}] Unable to read orchestrator cache: ${cacheError.message}`);
+      }
+    }
+
     console.log(`[${new Date().toISOString()}] Orchestrating task for: ${projectPath}`);
     console.log(`[${new Date().toISOString()}] Goal length: ${goal.length} characters`);
 
@@ -341,14 +400,25 @@ app.post("/orchestrate", async (req, res) => {
     // Execute the task
     const result = await orchestrator.execute(goal, projectPath);
 
-    return res.json({
+    const responsePayload = {
       success: result.success,
       result: result.result,
       spawnedAgents: result.spawnedAgents || [],
       agentResults: result.agentResults || [],
       conversationTurns: result.conversationTurns || 0,
       error: result.error
-    });
+    };
+
+    if (responsePayload.success && orchestratorCacheKey) {
+      try {
+        await redisClient.set(orchestratorCacheKey, JSON.stringify(responsePayload), { EX: 1800 });
+        console.log(`[${new Date().toISOString()}] 💾 Stored orchestrator result in cache (${orchestratorCacheKey})`);
+      } catch (cacheError) {
+        console.warn(`[${new Date().toISOString()}] Failed to store orchestrator cache: ${cacheError.message}`);
+      }
+    }
+
+    return res.json(responsePayload);
   } catch (error) {
     console.error(`[${new Date().toISOString()}] Error in /orchestrate:`, error);
     return res.status(500).json({
