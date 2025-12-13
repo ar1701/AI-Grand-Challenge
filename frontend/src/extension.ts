@@ -291,49 +291,112 @@ export function activate(context: vscode.ExtensionContext) {
     const folderName = projectPath.split(/[/\\]/).pop() || 'project';
     
     // Build goal based on target
-    let goal = `Perform a comprehensive security vulnerability analysis on the project at: ${projectPath}\n\n`;
+    let goal = `Perform a comprehensive code analysis on the project at: ${projectPath}\n\n`;
     
     if (specificFiles && specificFiles.length > 0) {
       goal += `**FOCUS ON THESE SPECIFIC FILES:**\n`;
       specificFiles.forEach(f => {
         goal += `- ${f}\n`;
       });
-      goal += `\nAnalyze ONLY these ${specificFiles.length} file(s) for security vulnerabilities.\n`;
+      goal += `\nAnalyze ONLY these ${specificFiles.length} file(s).\n`;
     } else {
-      goal += `Analyze the ENTIRE project for security vulnerabilities.\n`;
+      goal += `Analyze the ENTIRE project.\n`;
     }
     
     goal += `
-**MANDATORY OUTPUT FORMAT for each finding:**
+**ANALYZE FOR ALL OF THE FOLLOWING:**
+1. Security vulnerabilities (SQL injection, XSS, auth bypass, etc.)
+2. Edge cases caused by bugs - including which other files/functions they affect via dependency graph
+3. Cross-file bugs that span multiple modules
+4. Business logic issues that could break user journeys
 
+**MANDATORY OUTPUT FORMATS:**
+
+### For Security Vulnerabilities:
 #### [🔴 CRITICAL / 🟠 HIGH / 🟡 MEDIUM / 🔵 LOW] - [Vulnerability Name]
+**Type:** \`vulnerability\`
 **File:** path/to/actual/file.js
 **Line:** 45-48
 **Vulnerable Code:**
 \`\`\`javascript
 // ACTUAL code from the file
-const dangerous = eval(userInput);
 \`\`\`
 **Issue:** Specific explanation
 **Fix:**
 \`\`\`javascript
 // Secure alternative
-const safe = JSON.parse(userInput);
 \`\`\`
 **Impact:** What attacker can do
+
+### For Edge Cases:
+#### ⚠️ EDGE CASE - [Title]
+**Type:** \`edge-case\`
+**File:** path/to/file.js
+**Line:** 45-48
+**Problematic Code:**
+\`\`\`javascript
+// Code that causes edge-case
+\`\`\`
+**Edge Case:** Describe inputs/conditions that trigger unexpected behavior
+**Affected Dependencies:**
+- path/to/dependentFile.js:functionName()
+**Fix:**
+\`\`\`javascript
+// Defensive handling
+\`\`\`
+**User Impact:** Which user flows break
+
+### For Cross-File Bugs:
+#### 🔗 CROSS-FILE BUG - [Title]
+**Type:** \`cross-file-bug\`
+**Primary File:** path/to/source.js
+**Line:** 30-35
+**Root Cause Code:**
+\`\`\`javascript
+// Code initiating the bug
+\`\`\`
+**Issue:** Root cause and propagation
+**Ripple Effect Files:**
+- path/to/consumer1.js:12 – impact
+- path/to/consumer2.js:45 – impact
+**Fix:**
+\`\`\`javascript
+// Correction
+\`\`\`
+**Impact:** What breaks across system
+
+### For Business Logic Issues:
+#### 💼 BUSINESS LOGIC - [Title]
+**Type:** \`business-logic\`
+**File:** path/to/file.js
+**Line:** 100-110
+**Problematic Code:**
+\`\`\`javascript
+// Code with flawed logic
+\`\`\`
+**Issue:** Incorrect business rule / state transition
+**Affected User Journeys:**
+- Journey 1: step sequence that breaks
+**Fix:**
+\`\`\`javascript
+// Correct logic
+\`\`\`
+**Business Impact:** Revenue loss, data integrity issues, UX failures
 
 Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
 `;
 
     await vscode.window.withProgress({
       location: vscode.ProgressLocation.Notification,
-      title: "🔒 Security Analysis",
+      title: "🔍 Code Analysis",
       cancellable: false
     }, async (progress) => {
       try {
         progress.report({ increment: 10, message: `Analyzing ${targetDescription}...` });
         
-        const response: OrchestrationResponse = await orchestrateSecurityAnalysis(goal, projectPath);
+        const response: OrchestrationResponse = await orchestrateSecurityAnalysis(goal, projectPath, {
+          forceRefresh: true
+        });
         
         if (!response.success) {
           throw new Error(response.error || "Security analysis failed");
@@ -589,8 +652,55 @@ Provide AT LEAST 3-5 concrete findings per agent from ACTUAL code you read.
     scanProject, 
     scanSelectedFiles, 
     navigateToCommand,
+    vscode.commands.registerCommand('secureScan.applyFix', applyFixCommand),
     activeEditorListener
   );
+}
+
+async function applyFixCommand(filePath: string, line: number, endLine: number | undefined, fixText: string) {
+  try {
+    const targetUri = vscode.Uri.file(filePath);
+    const doc = await vscode.workspace.openTextDocument(targetUri);
+    const editor = await vscode.window.showTextDocument(doc);
+
+    const issue = projectIssues.find(i => i.filePath === filePath && Math.abs(i.line - line) <= 2);
+    const startLine = Math.max(0, Math.min(line, doc.lineCount - 1));
+    const snippetLineCount = issue && issue.code_snippet
+      ? issue.code_snippet.split('\n').filter(l => l.trim().length > 0).length
+      : 1;
+    const computedEndLine = endLine !== undefined && endLine >= startLine
+      ? Math.min(endLine, doc.lineCount - 1)
+      : Math.min(startLine + Math.max(0, snippetLineCount - 1), doc.lineCount - 1);
+
+    const range = new vscode.Range(
+      new vscode.Position(startLine, 0),
+      new vscode.Position(computedEndLine, doc.lineAt(computedEndLine).text.length)
+    );
+
+    const edit = new vscode.WorkspaceEdit();
+    edit.replace(targetUri, range, fixText);
+    const success = await vscode.workspace.applyEdit(edit);
+
+    if (success) {
+      await doc.save();
+      vscode.window.showInformationMessage(`Applied fix to ${path.basename(filePath)}:${startLine + 1}`);
+      // Update cached lines and re-highlight only this issue
+      snippetFileLineCache.delete(filePath);
+      if (issue) {
+        issue.line = startLine;
+        issue.calculatedEndLine = startLine + fixText.split('\n').length - 1;
+        issue.code_snippet = fixText;
+        projectIssues.forEach(rec => { rec.isActive = false; });
+        issue.isActive = true;
+        highlightEntries(editor, [issue]);
+      }
+    } else {
+      vscode.window.showErrorMessage(`Could not apply fix to ${path.basename(filePath)}`);
+    }
+  } catch (error: any) {
+    console.error('Failed to apply fix:', error);
+    vscode.window.showErrorMessage(`Failed to apply fix: ${error.message}`);
+  }
 }
 
 /**
@@ -624,9 +734,10 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
     // Parse findings - handle multiple formats:
     // Format 1: Your format - 🔴 CRITICAL\nDBConnector.py:124\nProblem:...
     // Format 2: Prompt format - #### 🔴 CRITICAL - Title\n**File:**...\n**Line:**...
+    // New formats: ⚠️ EDGE CASE, 🔗 CROSS-FILE BUG, 💼 BUSINESS LOGIC
     
-    // Try Format 1 first (emoji-based blocks)
-    const emojiBlocks = message.split(/(?=🔴|🟠|🟡|🔵)/);
+    // Split on emoji markers for both vulnerabilities and new issue types
+    const emojiBlocks = message.split(/(?=🔴|🟠|🟡|🔵|⚠️|🔗|💼)/);
     
     for (const block of emojiBlocks) {
       if (block.trim().length < 20) continue;
@@ -635,6 +746,16 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
       console.log(block.substring(0, 300));
       
       try {
+        // Detect issue type from block content
+        let issueType: 'vulnerability' | 'edge-case' | 'cross-file-bug' | 'business-logic' = 'vulnerability';
+        if (block.includes('⚠️') || block.includes('EDGE CASE') || block.includes('**Type:** `edge-case`')) {
+          issueType = 'edge-case';
+        } else if (block.includes('🔗') || block.includes('CROSS-FILE BUG') || block.includes('**Type:** `cross-file-bug`')) {
+          issueType = 'cross-file-bug';
+        } else if (block.includes('💼') || block.includes('BUSINESS LOGIC') || block.includes('**Type:** `business-logic`')) {
+          issueType = 'business-logic';
+        }
+        
         // Extract severity
         let severity: 'Critical' | 'High' | 'Medium' | 'Low' = 'Medium';
         if (block.includes('🔴') || block.includes('CRITICAL')) {
@@ -648,24 +769,26 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
         }
         
         // Check if it's Format 2 (with **File:** markers)
-        const hasFileMarker = block.includes('**File:**');
+        const hasFileMarker = block.includes('**File:**') || block.includes('**Primary File:**');
         
         if (hasFileMarker) {
           // Format 2: #### 🔴 CRITICAL - Title\n**File:**...**Line:**...
-          console.log('Using Format 2 (File marker)');
+          // Also handles: EDGE CASE, CROSS-FILE BUG, BUSINESS LOGIC formats
+          console.log(`Using Format 2 (File marker), issueType: ${issueType}`);
           
-          const titleMatch = block.match(/####?\s*(?:🔴|🟠|🟡|🔵)?\s*(?:CRITICAL|HIGH|MEDIUM|LOW)?\s*-\s*([^\n]+)/);
-          const fileMatch = block.match(/\*\*File:\*\*\s*`?([^`\n]+)`?/);
+          const titleMatch = block.match(/####?\s*(?:🔴|🟠|🟡|🔵|⚠️|🔗|💼)?\s*(?:CRITICAL|HIGH|MEDIUM|LOW|EDGE CASE|CROSS-FILE BUG|BUSINESS LOGIC)?\s*-?\s*([^\n]+)/);
+          // Support both **File:** and **Primary File:** for cross-file bugs
+          const fileMatch = block.match(/\*\*(?:File|Primary File):\*\*\s*`?([^`\n]+)`?/);
           const lineMatch = block.match(/\*\*Line:\*\*\s*`?([^`\n]+)`?/);
           
-          // Improved vulnerable code extraction - handle both code blocks and plain text
-          let vulnMatch = block.match(/\*\*Vulnerable Code:\*\*\s*```\w*\n([\s\S]*?)```/);
+          // Extract code snippet - try multiple field names based on issue type
+          let vulnMatch = block.match(/\*\*(?:Vulnerable Code|Problematic Code|Root Cause Code):\*\*\s*```\w*\n([\s\S]*?)```/);
           if (!vulnMatch) {
-            // Try without code blocks - match until next ** marker or end
-            vulnMatch = block.match(/\*\*Vulnerable Code:\*\*\s*\n([\s\S]*?)(?=\n\*\*|$)/);
+            vulnMatch = block.match(/\*\*(?:Vulnerable Code|Problematic Code|Root Cause Code):\*\*\s*\n([\s\S]*?)(?=\n\*\*|$)/);
           }
           
-          const issueMatch = block.match(/\*\*Issue:\*\*\s*([^\n]+(?:\n(?!\*\*)[^\n]+)*)/);
+          // Extract issue/problem description - try multiple field names
+          const issueMatch = block.match(/\*\*(?:Issue|Edge Case):\*\*\s*([^\n]+(?:\n(?!\*\*)[^\n]+)*)/);
           
           // Improved fix extraction
           let fixMatch = block.match(/\*\*Fix:\*\*\s*```\w*\n([\s\S]*?)```/);
@@ -673,11 +796,23 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
             fixMatch = block.match(/\*\*Fix:\*\*\s*\n([\s\S]*?)(?=\n\*\*|---|\n\n\n|$)/);
           }
           
-          const impactMatch = block.match(/\*\*Impact:\*\*\s*([^\n]+(?:\n(?!\*\*|---|####)[^\n]+)*)/);
+          // Extract impact - try multiple field names
+          const impactMatch = block.match(/\*\*(?:Impact|User Impact|Business Impact):\*\*\s*([^\n]+(?:\n(?!\*\*|---|####)[^\n]+)*)/);
           
           // Also try alternative format: "Problem:" instead of "Issue:"
           const problemMatch = block.match(/\*\*Problem:\*\*\s*([^\n]+(?:\n(?!\*\*)[^\n]+)*)/);
-          const issueText = issueMatch ? issueMatch[1].trim() : (problemMatch ? problemMatch[1].trim() : '');          
+          const issueText = issueMatch ? issueMatch[1].trim() : (problemMatch ? problemMatch[1].trim() : '');
+          
+          // Extract affected dependencies for edge-case and cross-file-bug types
+          const affectedDepsMatch = block.match(/\*\*(?:Affected Dependencies|Ripple Effect Files|Affected User Journeys):\*\*\s*([\s\S]*?)(?=\n\*\*Fix|\n---|\n\n\n|$)/);
+          let affectedDependencies: string[] = [];
+          if (affectedDepsMatch) {
+            const depsText = affectedDepsMatch[1].trim();
+            affectedDependencies = depsText.split('\n')
+              .map(line => line.replace(/^[-*]\s*/, '').trim())
+              .filter(line => line.length > 0);
+          }
+          
           if (!fileMatch) {
             console.log('⚠️ No file marker found in Format 2 block');
             continue;
@@ -696,7 +831,7 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
           
           const lineNum = Math.max(0, parseInt(lineNumMatch[0]) - 1);
           
-          console.log(`📄 Format 2 - File: ${fileName}, Line string: "${lineStr}", Parsed line: ${lineNum + 1}`);
+          console.log(`📄 Format 2 - File: ${fileName}, Line string: "${lineStr}", Parsed line: ${lineNum + 1}, Type: ${issueType}`);
           
           const filePath = await resolveReportedFile(projectPath, fileName);
           if (!filePath) {
@@ -720,20 +855,32 @@ async function parseSecurityFindings(response: OrchestrationResponse, projectPat
             console.log(`⚠️ Unable to refine snippet, using provided line ${lineNum + 1}`);
           }
 
+          // Build explanation based on issue type
+          let explanation = titleMatch?.[1]?.trim() || 'Issue';
+          explanation += `\n\n${issueText}`;
+          if (impactMatch?.[1]) {
+            explanation += `\n\nImpact: ${impactMatch[1].trim()}`;
+          }
+          if (affectedDependencies.length > 0) {
+            explanation += `\n\nAffected: ${affectedDependencies.join(', ')}`;
+          }
+
           issues.push({
             filePath: filePath,
             line: snippetAlignment.line,
             code_snippet: (snippetAlignment.resolvedText || vulnerableCode).trimEnd(),
             severity: severity,
-            vulnerability_explanation: `${titleMatch?.[1]?.trim() || 'Security Issue'}\n\n${issueText}\n\nImpact: ${impactMatch?.[1]?.trim() || 'Security risk'}`,
-            recommended_fix: fixMatch ? fixMatch[1].trim().replace(/```\w*\n?/g, '').trim() : 'Review and apply security best practices',
+            vulnerability_explanation: explanation,
+            recommended_fix: fixMatch ? fixMatch[1].trim().replace(/```\w*\n?/g, '').trim() : 'Review and apply best practices',
             cve_ids: [],
             cwe_ids: [],
             calculatedEndLine: snippetAlignment.endLine,
-            isActive: false
+            isActive: false,
+            issueType: issueType,
+            affectedDependencies: affectedDependencies.length > 0 ? affectedDependencies : undefined
           });
           
-          console.log(`✅ Added Format 2 issue`);
+          console.log(`✅ Added Format 2 issue (${issueType})`);
           continue;
         }
         

@@ -8,7 +8,7 @@ const crypto = require('crypto');
 const util = require('util');
 const { execFile } = require('child_process');
 const execFileAsync = util.promisify(execFile);
-const { redisClient, connectRedis } = require('./utils/redisClient');
+const { redisClient, ensureRedisConnection } = require('./utils/redisClient');
 console.log(`Server configured to use analysis engine: ${selectedEngine.toUpperCase()}`);
 
 
@@ -53,64 +53,22 @@ function getContentHash(content) {
   return crypto.createHash('sha256').update(content).digest('hex');
 }
 
-async function computeDirectoryFingerprint(rootPath, maxFiles = 2000) {
-  const hash = crypto.createHash('sha1');
-  const stack = [rootPath];
-  let processed = 0;
-
-  while (stack.length > 0 && processed < maxFiles) {
-    const current = stack.pop();
-    try {
-      const entries = await fs.promises.readdir(current, { withFileTypes: true });
-      for (const entry of entries) {
-        if (['node_modules', '.git', 'dist', 'build', 'out', 'coverage', 'tmp'].includes(entry.name)) {
-          continue;
-        }
-
-        const fullPath = path.join(current, entry.name);
-        if (entry.isDirectory()) {
-          stack.push(fullPath);
-        } else if (entry.isFile()) {
-          try {
-            const stats = await fs.promises.stat(fullPath);
-            hash.update(fullPath.replace(rootPath, ''));
-            hash.update(String(stats.mtimeMs));
-            hash.update(String(stats.size));
-            processed++;
-            if (processed >= maxFiles) break;
-          } catch (fileErr) {
-            continue;
-          }
-        }
-      }
-    } catch (dirErr) {
-      continue;
-    }
-  }
-
-  hash.update(`count:${processed}`);
-  return `fp:${hash.digest('hex')}`;
-}
-
 async function getProjectStateSignature(projectPath) {
   try {
     const [headResult, statusResult] = await Promise.all([
       execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: projectPath }),
       execFileAsync('git', ['status', '--porcelain'], { cwd: projectPath })
     ]);
-    const gitSignature = `${headResult.stdout.trim()}|${statusResult.stdout.trim()}`;
-    if (gitSignature.trim()) {
-      return gitSignature;
-    }
+    return `${headResult.stdout.trim()}|${statusResult.stdout.trim()}`;
   } catch (gitError) {
     console.warn(`[${new Date().toISOString()}] Unable to derive git signature for ${projectPath}: ${gitError.message}`);
-  }
-
-  try {
-    return await computeDirectoryFingerprint(projectPath);
-  } catch (fpError) {
-    console.warn(`[${new Date().toISOString()}] Unable to derive directory fingerprint for ${projectPath}: ${fpError.message}`);
-    return null;
+    try {
+      const stats = await fs.promises.stat(projectPath);
+      return `fs:${stats.mtimeMs}`;
+    } catch (fsError) {
+      console.warn(`[${new Date().toISOString()}] Unable to derive filesystem signature for ${projectPath}: ${fsError.message}`);
+      return null;
+    }
   }
 }
 
@@ -210,6 +168,7 @@ app.post("/analyze-multiple-files", async (req, res) => {
       console.log(`[${new Date().toISOString()}] 1b. Batch #${index + 1}: First 100 chars: ${batchContent.substring(0, 100).replace(/\n/g, '\\n')}`);
 
       console.log(`[${new Date().toISOString()}] 2. Batch #${index + 1}: Checking Redis for key...`);
+      await ensureRedisConnection();
       const cachedResult = await redisClient.get(cacheKey);
       console.log(`[${new Date().toISOString()}] 3. Batch #${index + 1}: Finished checking Redis.`);
 
@@ -232,6 +191,7 @@ app.post("/analyze-multiple-files", async (req, res) => {
         console.log(`[${new Date().toISOString()}] 6. Batch #${index + 1}: AI analysis finished.`);
         
         console.log(`[${new Date().toISOString()}] 7. Batch #${index + 1}: Setting result in Redis...`);
+        await ensureRedisConnection();
         await redisClient.set(cacheKey, analysisResult, { EX: 3600 });
         console.log(`[${new Date().toISOString()}] 8. Batch #${index + 1}: Finished setting result in Redis.`);
       }
@@ -282,6 +242,7 @@ app.post("/code-block", async (req,res)=>{
         
         // Check Redis cache first
         console.log(`[${new Date().toISOString()}] Checking Redis cache...`);
+        await ensureRedisConnection();
         const cachedResult = await redisClient.get(cacheKey);
         
         let rawResponse;
@@ -296,6 +257,7 @@ app.post("/code-block", async (req,res)=>{
             
             // Store in cache
             console.log(`[${new Date().toISOString()}] Storing result in Redis cache...`);
+            await ensureRedisConnection();
             await redisClient.set(cacheKey, rawResponse, { EX: 3600 }); // Cache for 1 hour
             console.log(`[${new Date().toISOString()}] Result cached successfully.`);
         }
@@ -357,7 +319,8 @@ app.post("/orchestrate", async (req, res) => {
   console.log(`[${new Date().toISOString()}] POST /orchestrate (Engine: ${selectedEngine})`);
   
   try {
-    let { goal, projectPath, customPrompt } = req.body;
+    let { goal, projectPath, customPrompt, forceRefresh } = req.body;
+    const skipOrchestratorCache = Boolean(forceRefresh);
     
     // Validate required parameters
     if (!goal) {
@@ -405,7 +368,7 @@ app.post("/orchestrate", async (req, res) => {
         goal,
         projectPath,
         customPrompt: customPrompt || '',
-        projectSignature: projectSignature || `unknown-${Date.now()}`
+        projectSignature: projectSignature || 'unknown'
       };
       orchestratorCacheKey = `orchestrator:${getContentHash(JSON.stringify(cacheIdentity))}`;
       console.log(`[${new Date().toISOString()}] Orchestrator cache key: ${orchestratorCacheKey}`);
@@ -417,19 +380,24 @@ app.post("/orchestrate", async (req, res) => {
     }
 
     if (orchestratorCacheKey) {
-      try {
-        const cachedPayload = await redisClient.get(orchestratorCacheKey);
-        if (cachedPayload) {
-          console.log(`[${new Date().toISOString()}] ✅ Orchestrator cache HIT (${orchestratorCacheKey})`);
-          try {
-            return res.json(JSON.parse(cachedPayload));
-          } catch (parseError) {
-            console.warn(`[${new Date().toISOString()}] Cached orchestrator payload malformed: ${parseError.message}`);
+      if (skipOrchestratorCache) {
+        console.log(`[${new Date().toISOString()}] ⏭️ Skipping orchestrator cache because forceRefresh=true`);
+      } else {
+        try {
+          await ensureRedisConnection();
+          const cachedPayload = await redisClient.get(orchestratorCacheKey);
+          if (cachedPayload) {
+            console.log(`[${new Date().toISOString()}] ✅ Orchestrator cache HIT (${orchestratorCacheKey})`);
+            try {
+              return res.json(JSON.parse(cachedPayload));
+            } catch (parseError) {
+              console.warn(`[${new Date().toISOString()}] Cached orchestrator payload malformed: ${parseError.message}`);
+            }
           }
+          console.log(`[${new Date().toISOString()}] ⚠️ Orchestrator cache MISS (${orchestratorCacheKey})`);
+        } catch (cacheError) {
+          console.warn(`[${new Date().toISOString()}] Unable to read orchestrator cache: ${cacheError.message}`);
         }
-        console.log(`[${new Date().toISOString()}] ⚠️ Orchestrator cache MISS (${orchestratorCacheKey})`);
-      } catch (cacheError) {
-        console.warn(`[${new Date().toISOString()}] Unable to read orchestrator cache: ${cacheError.message}`);
       }
     }
 
@@ -451,13 +419,16 @@ app.post("/orchestrate", async (req, res) => {
       error: result.error
     };
 
-    if (responsePayload.success && orchestratorCacheKey) {
+    if (responsePayload.success && orchestratorCacheKey && !skipOrchestratorCache) {
       try {
+        await ensureRedisConnection();
         await redisClient.set(orchestratorCacheKey, JSON.stringify(responsePayload), { EX: 1800 });
         console.log(`[${new Date().toISOString()}] 💾 Stored orchestrator result in cache (${orchestratorCacheKey})`);
       } catch (cacheError) {
         console.warn(`[${new Date().toISOString()}] Failed to store orchestrator cache: ${cacheError.message}`);
       }
+    } else if (skipOrchestratorCache) {
+      console.log(`[${new Date().toISOString()}] ⏭️ Not caching orchestrator result because forceRefresh=true`);
     }
 
     return res.json(responsePayload);
@@ -615,8 +586,7 @@ app.get('/', (req,res)=>{
 
 async function startServer() {
   try {
-    // Try to connect to Redis
-    await connectRedis();
+    await ensureRedisConnection();
 
     // If connection is successful, start the Express server
     app.listen(port, () => {

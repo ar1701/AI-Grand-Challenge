@@ -47,7 +47,11 @@ export async function scanSingleFileWithBackend(filename: string, content: strin
  * Performs comprehensive security analysis using multi-agent orchestration.
  * Used for the "Security Analysis" command.
  */
-export async function orchestrateSecurityAnalysis(goal: string, projectPath: string): Promise<any> {
+export async function orchestrateSecurityAnalysis(
+  goal: string,
+  projectPath: string,
+  options?: { forceRefresh?: boolean }
+): Promise<any> {
   const baseUrl = vscode.workspace.getConfiguration().get<string>("secureScan.backendUrl");
   if (!baseUrl) throw new Error("Backend URL not configured");
 
@@ -58,10 +62,16 @@ export async function orchestrateSecurityAnalysis(goal: string, projectPath: str
   console.log(`🎯 Goal: ${goal.substring(0, 100)}...`);
 
   try {
+    const payload = {
+      goal,
+      projectPath,
+      forceRefresh: options?.forceRefresh ?? false
+    };
+
     const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ goal, projectPath })
+      body: JSON.stringify(payload)
     });
 
     console.log(`📡 Response status: ${res.status}`);

@@ -128,3 +128,98 @@ const user = await db.query(query, [username]);
 "The files could not be found. Please verify the paths."
 
 **THIS IS UNACCEPTABLE. Always provide actual findings from actual code you read.**
+
+---
+
+## Additional Finding Formats
+
+Besides vulnerabilities, you MUST also report **Edge Cases**, **Cross-File Bugs**, and **Business-Logic Issues** using the formats below.
+
+### Edge Case Format
+
+---
+#### ⚠️ EDGE CASE - [Title describing the edge case]
+
+**Type:** `edge-case`
+**File:** `path/to/file.js`
+**Line:** `45-48`
+
+**Problematic Code:**
+```javascript
+// ACTUAL code that causes edge-case behavior
+```
+
+**Edge Case:** [Describe specific inputs / conditions that cause unexpected behavior]
+
+**Affected Dependencies:**
+- `path/to/dependentFile.js:functionName()`
+- `path/to/anotherFile.js:anotherFunction()`
+
+**Fix:**
+```javascript
+// Defensive handling for edge case
+```
+
+**User Impact:** [Which user flows / features break when this edge case occurs]
+
+---
+
+### Cross-File Bug Format
+
+---
+#### 🔗 CROSS-FILE BUG - [Title describing the multi-file defect]
+
+**Type:** `cross-file-bug`
+**Primary File:** `path/to/source.js`
+**Line:** `30-35`
+
+**Root Cause Code:**
+```javascript
+// The code that initiates the bug
+```
+
+**Issue:** [Explain the root cause and how it propagates]
+
+**Ripple Effect Files:**
+- `path/to/consumer1.js:12` – how it's affected
+- `path/to/consumer2.js:45` – how it's affected
+
+**Fix:**
+```javascript
+// Correction in the primary file
+```
+
+**Impact:** [What breaks across the system]
+
+---
+
+### Business-Logic Issue Format
+
+---
+#### 💼 BUSINESS LOGIC - [Title describing the logic flaw]
+
+**Type:** `business-logic`
+**File:** `path/to/file.js`
+**Line:** `100-110`
+
+**Problematic Code:**
+```javascript
+// ACTUAL code with flawed business logic
+```
+
+**Issue:** [Explain the incorrect business rule / state transition / accounting error]
+
+**Affected User Journeys:**
+- Journey 1: [step sequence that breaks]
+- Journey 2: [another affected flow]
+
+**Fix:**
+```javascript
+// Correct business logic
+```
+
+**Business Impact:** [Revenue loss, data integrity issues, UX failures, etc.]
+
+---
+
+**REMEMBER:** Use the appropriate format based on finding type. Mark the **Type:** field so the frontend can categorize and display it correctly.

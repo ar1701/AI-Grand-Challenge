@@ -25,6 +25,17 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
             vscode.commands.executeCommand(message.commandId);
           }
           return;
+        case 'applyFix':
+          if (message.filePath && typeof message.fix === 'string') {
+            vscode.commands.executeCommand(
+              'secureScan.applyFix',
+              message.filePath,
+              message.line,
+              message.endLine,
+              message.fix
+            );
+          }
+          return;
       }
     });
 
@@ -63,6 +74,33 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
       }
     };
 
+    const getIssueTypeLabel = (issueType: string | undefined) => {
+      switch(issueType) {
+        case 'edge-case': return '⚠️ EDGE CASE';
+        case 'cross-file-bug': return '🔗 CROSS-FILE';
+        case 'business-logic': return '💼 BUSINESS';
+        default: return '🛡️ VULNERABILITY';
+      }
+    };
+
+    const getIssueTypeColor = (issueType: string | undefined) => {
+      switch(issueType) {
+        case 'edge-case': return '#e3b341';
+        case 'cross-file-bug': return '#569cd6';
+        case 'business-logic': return '#c586c0';
+        default: return '#f14c4c';
+      }
+    };
+
+    const getCodeLabel = (issueType: string | undefined) => {
+      switch(issueType) {
+        case 'edge-case': return 'Problematic Code:';
+        case 'cross-file-bug': return 'Root Cause:';
+        case 'business-logic': return 'Logic Flaw:';
+        default: return 'Vulnerable Code:';
+      }
+    };
+
     const quickActions = [
       { label: 'Scan Active File', command: 'secureScan.scanActiveFile', title: 'Analyze the currently open editor' },
       { label: 'Scan Entire Project', command: 'secureScan.scanProject', title: 'Analyze every file in the workspace' },
@@ -80,15 +118,24 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
       const severityColor = getSeverityColor(issue.severity);
       const severityEmoji = getSeverityEmoji(issue.severity);
       const lineNumber = issue.line + 1;
+      const endLineNumber = issue.calculatedEndLine !== undefined ? issue.calculatedEndLine + 1 : lineNumber;
+      const encodedFix = encodeURIComponent(issue.recommended_fix || '');
+      const issueTypeLabel = getIssueTypeLabel(issue.issueType);
+      const issueTypeColor = getIssueTypeColor(issue.issueType);
+      const codeLabel = getCodeLabel(issue.issueType);
 
       return `
       <div 
         class="issue-item"
         onclick="navigateTo('${escapeHtml(issue.filePath)}', ${issue.line})"
         title="Click to open ${escapeHtml(fileName)}:${lineNumber}"
+        style="border-left-color: ${issueTypeColor};"
       >
         <div class="issue-header">
-          <span class="severity" style="color: ${severityColor};">${severityEmoji} ${escapeHtml(issue.severity.toUpperCase())}</span>
+          <div class="issue-type-row">
+            <span class="issue-type" style="color: ${issueTypeColor};">${issueTypeLabel}</span>
+            <span class="severity" style="color: ${severityColor};">${severityEmoji} ${escapeHtml(issue.severity.toUpperCase())}</span>
+          </div>
           <span class="file-location">${escapeHtml(fileName)}:${lineNumber}</span>
         </div>
         
@@ -100,14 +147,33 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
           
           ${issue.code_snippet ? `
           <div class="section">
-            <strong>Vulnerable Code:</strong>
+            <strong>${escapeHtml(codeLabel)}</strong>
             <pre class="code-block">${escapeHtml(issue.code_snippet)}</pre>
+          </div>
+          ` : ''}
+          
+          ${issue.affectedDependencies && issue.affectedDependencies.length > 0 ? `
+          <div class="section">
+            <strong>Affected Files:</strong>
+            <ul class="affected-list">
+              ${issue.affectedDependencies.map(dep => `<li>${escapeHtml(dep)}</li>`).join('')}
+            </ul>
           </div>
           ` : ''}
           
           ${issue.recommended_fix ? `
           <div class="section">
-            <strong>Fix:</strong>
+            <div class="fix-header">
+              <strong>Fix:</strong>
+              <button class="apply-fix" 
+                data-file="${escapeHtml(issue.filePath)}"
+                data-line="${issue.line}"
+                data-endline="${issue.calculatedEndLine ?? issue.line}"
+                data-fix="${encodedFix}"
+                onclick="applyFix(this)">
+                Apply Fix
+              </button>
+            </div>
             <pre class="code-block fix">${escapeHtml(issue.recommended_fix)}</pre>
           </div>
           ` : ''}
@@ -180,9 +246,22 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
           .issue-header {
             display: flex;
             justify-content: space-between;
-            align-items: center;
+            align-items: flex-start;
             margin-bottom: 10px;
             font-size: 12px;
+          }
+          
+          .issue-type-row {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+          }
+          
+          .issue-type {
+            font-weight: bold;
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
           }
           
           .severity {
@@ -199,6 +278,42 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
           
           .issue-body {
             font-size: 12px;
+          }
+          
+          .affected-list {
+            margin: 4px 0 0 0;
+            padding-left: 16px;
+            font-size: 11px;
+            color: var(--vscode-descriptionForeground);
+          }
+          
+          .affected-list li {
+            margin-bottom: 2px;
+            font-family: 'Courier New', monospace;
+          }
+
+          .fix-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 8px;
+          }
+
+          .apply-fix {
+            border: 1px solid var(--vscode-button-border, var(--vscode-panel-border));
+            background: var(--vscode-button-background);
+            color: var(--vscode-button-foreground);
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            font-weight: 600;
+            transition: background 0.15s ease, transform 0.1s ease;
+          }
+
+          .apply-fix:hover {
+            background: var(--vscode-button-hoverBackground);
+            transform: translateY(-1px);
           }
           
           .section {
@@ -256,14 +371,14 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
         </style>
       </head>
       <body>
-        <h2>🔒 Security Findings</h2>
+        <h2>🔍 Code Analysis Findings</h2>
         <div class="toolbar">
           ${quickActionButtons}
         </div>
         ${listItems.length > 0 ? listItems : `
           <div class="no-issues">
             <div class="no-issues-icon">✅</div>
-            <div>No security issues found.</div>
+            <div>No issues found.</div>
           </div>
         `}
         
@@ -281,6 +396,21 @@ export class IssuesPanelProvider implements vscode.WebviewViewProvider {
             vscode.postMessage({
               command: 'runCommand',
               commandId
+            });
+          }
+
+          function applyFix(button) {
+            const filePath = button.dataset.file;
+            const line = parseInt(button.dataset.line, 10);
+            const endLine = parseInt(button.dataset.endline, 10);
+            const fix = decodeURIComponent(button.dataset.fix || '');
+
+            vscode.postMessage({
+              command: 'applyFix',
+              filePath,
+              line,
+              endLine,
+              fix
             });
           }
         </script>

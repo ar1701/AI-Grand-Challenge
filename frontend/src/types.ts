@@ -12,6 +12,8 @@ export interface CWEEntry {
   mitigation: string;
 }
 
+export type IssueType = 'vulnerability' | 'edge-case' | 'cross-file-bug' | 'business-logic';
+
 export interface AnalyzerEntry {
   code_snippet: string;
   severity: Severity;
@@ -19,6 +21,10 @@ export interface AnalyzerEntry {
   recommended_fix: string;
   cve_ids: CVEEntry[];
   cwe_ids: CWEEntry[];
+  /** Type of finding: vulnerability, edge-case, cross-file-bug, or business-logic */
+  issueType?: IssueType;
+  /** For edge cases / cross-file bugs: list of affected files/functions */
+  affectedDependencies?: string[];
 }
 
 // Response for a single file scan (/code-block)
@@ -55,6 +61,8 @@ export interface Issue extends AnalyzerEntry {
   // Optional: Calculated end line for precise highlighting
   calculatedEndLine?: number;
   isActive?: boolean;
+  /** Override from AnalyzerEntry for convenience */
+  issueType?: IssueType;
 }
 
 // Orchestration types for multi-agent security analysis
